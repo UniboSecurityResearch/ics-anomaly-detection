@@ -167,6 +167,7 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
     
     test_errors = event_detector.reconstruction_errors(Xtest_val, batches=do_batches)
     test_instance_errors = test_errors.mean(axis=1)
+    test_instance_errors, Ytest_val = utils.normalize_array_length(test_instance_errors, Ytest_val)
 
     # Default to empty dict. Will still do F1 for window=1, ptile=95%
     grid_config = config.get('grid_search', dict())
@@ -207,7 +208,7 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
 
                 #Yhat = event_detector.detect(Xtest, theta = theta, window = window, batches=True)
                 Yhat = event_detector.cached_detect(test_instance_errors, theta = theta, window = window)
-                #Yhat = Yhat[window-1:].astype(int)
+                Yhat = Yhat[window-1:].astype(int)
 
                 choice_value = metric_func(Yhat, Ytest_val)
 
@@ -267,12 +268,14 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
         # Final test performance
         final_test_errors = event_detector.reconstruction_errors(Xtest_test, batches=do_batches)
         final_test_instance_errors = final_test_errors.mean(axis=1)
+        
+        final_test_instance_errors, Ytest_test = utils.normalize_array_length(final_test_instance_errors, Ytest_test)
 
         best_theta = np.quantile(validation_errors.mean(axis = 1), best_percentile)
         event_detector.save_detection_params(best_theta=best_theta, best_window=best_window)
 
         final_Yhat = event_detector.best_cached_detect(final_test_instance_errors)
-        #final_Yhat = final_Yhat[best_window-1:].astype(int)
+        final_Yhat = final_Yhat[best_window-1:].astype(int)
 
         metric_func = metrics.get(metric)
         final_value = metric_func(final_Yhat, Ytest_test)
@@ -467,7 +470,7 @@ if __name__ == "__main__":
         event_detector = train_forecast_model_by_idxs(model_type, config, Xfull, train_idxs, val_idxs)
 
         # Search for the best tuning of the window and theta parameters
-        hyperparameter_search(event_detector, model_type, config, Xfull, val_idxs, Xtest, Ytest, dataset_name,
+        hyperparameter_search(event_detector, model_type, config, Xfull, Xtest, Ytest, dataset_name,
             val_idxs=val_idxs,
             test_split=test_split,
             run_name=run_name,

@@ -67,6 +67,7 @@ class DeepNN(ICSDetector):
         # retrieve params
         nI = self.params['nI'] # number of inputs
         units = self.params['units'] # number of units per layer
+        history = self.params['history']
         layers = self.params['layers'] # Number of hidden layers
         activation = self.params['activation'] # Activation function between layers
         optimizer = self.params['optimizer'] # Keras optimizer
@@ -76,16 +77,15 @@ class DeepNN(ICSDetector):
             print('Error: Must have at least one layer. Found layers={}'.format(layers))
             return
 
-        input_layer = Input(shape=(nI))
+        input_layer = Input(shape=(history, nI))
 
-        deep_layer = Dense(units, activation=activation)(input_layer)
+        deep_layer = Flatten()(input_layer)
 
         # Add any additional layers beyond 1.
-        for x in range(layers - 1):
+        for _ in range(layers):
             deep_layer = Dense(units, activation=activation)(deep_layer)
         
-        flatten = Flatten()(deep_layer)
-        dense_out = Dense(nI)(flatten)
+        dense_out = Dense(nI)(deep_layer)
         
         # Define the total model
         model = Model(input_layer, dense_out)
@@ -101,12 +101,15 @@ class DeepNN(ICSDetector):
     def transform_to_window_data(self, dataset, target, target_size=1):
         data = []
         labels = []
+        
+        history = self.params['history']
 
-        start_index = 0
+        start_index = history
         end_index = len(dataset) - target_size
 
         for i in range(start_index, end_index):
-            data.append(dataset[i])
+            indices = range(i - history, i)
+            data.append(dataset[indices])
             labels.append(target[i+target_size])
 
         return np.array(data), np.array(labels)
@@ -250,12 +253,12 @@ class DeepNN(ICSDetector):
         
         if batches:
             
-            full_errors = np.zeros((x.shape[0] - 1, x.shape[1]))
+            full_errors = np.zeros((x.shape[0] - self.params['history'] - 1, x.shape[1]))
             idx = 0
             
             while idx < len(x):
                 
-                Xwindow, Ywindow = self.transform_to_window_data(x[idx: idx + eval_batch_size + 1], x[idx:idx + eval_batch_size + 1])
+                Xwindow, Ywindow = self.transform_to_window_data(x[idx: idx + eval_batch_size + self.params['history'] + 1], x[idx:idx + eval_batch_size + self.params['history'] + 1])
 
                 if idx + eval_batch_size > len(full_errors):
                     full_errors[idx:] = (self.predict(Xwindow, **keras_params) - Ywindow)**2                
