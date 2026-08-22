@@ -67,6 +67,7 @@ class DeepNN(ICSDetector):
         # retrieve params
         nI = self.params['nI'] # number of inputs
         units = self.params['units'] # number of units per layer
+        history = self.params['history']
         layers = self.params['layers'] # Number of hidden layers
         activation = self.params['activation'] # Activation function between layers
         optimizer = self.params['optimizer'] # Keras optimizer
@@ -76,7 +77,7 @@ class DeepNN(ICSDetector):
             print('Error: Must have at least one layer. Found layers={}'.format(layers))
             return
 
-        input_layer = Input(shape=(nI))
+        input_layer = Input(shape=(history, nI))
 
         deep_layer = Flatten()(input_layer)
 
@@ -84,7 +85,7 @@ class DeepNN(ICSDetector):
         for _ in range(layers):
             deep_layer = Dense(units, activation=activation)(deep_layer)
         
-        dense_out = Dense(nI)(flatten)
+        dense_out = Dense(nI)(deep_layer)
         
         # Define the total model
         model = Model(input_layer, dense_out)
