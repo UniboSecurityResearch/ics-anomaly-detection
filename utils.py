@@ -212,6 +212,7 @@ def update_config_model(args, config, model_type, dataset_name):
         dnn_model_params = {
             'units' : args.dnn_model_params_units,
             'layers': args.dnn_model_params_layers,
+            'history': 1,
             'verbose': 1,
         }
 
