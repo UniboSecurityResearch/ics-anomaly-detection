@@ -52,18 +52,6 @@ def build_context(args: argparse.Namespace) -> AttackContext:
         args.history = None
         args.scope = "target"
 
-    if args.model_type == "DNN":
-        print(
-            "WARNING: this suite treats DNN as a point reconstruction model "
-            "(error = (model(X[t]) - X[t])^2). The pwwl repository instead trains DNN as "
-            "a 1-step forecaster and main_eval.py scores it through the SEQUENCE branch "
-            "(input X[lead-1], target X[lead+1]; detector/dnn.py, main_eval.py:287-289). "
-            "The two error definitions differ, so theta may NOT reproduce main_eval.py. "
-            "RUN --sanity-check FIRST: if the detection rates diverge, your DNN must be "
-            "attacked as a sequence model (this suite currently supports CNN/GRU/LSTM for "
-            "that). AE/CNN/GRU/LSTM are unaffected."
-        )
-
     target_indices = select_target_indices(args, labels, n_rows)
     protected = parse_protected_cols(args.protected_cols, sensor_cols)
     modification_mask = build_modification_mask(
