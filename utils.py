@@ -166,6 +166,10 @@ def get_argparser():
         default=64,
         type=int,
         help="Number of units in hidden layers of the DNN")
+    parser.add_argument("--dnn_model_params_history", 
+        default=1,
+        type=int,
+        help="History length of the DNN")
     parser.add_argument("--dnn_model_params_layers", 
         default=4,
         type=int,
@@ -211,6 +215,7 @@ def update_config_model(args, config, model_type, dataset_name):
         
         dnn_model_params = {
             'units' : args.dnn_model_params_units,
+            'history' : args.dnn_model_params_history,
             'layers': args.dnn_model_params_layers,
             'verbose': 1,
         }
@@ -218,7 +223,7 @@ def update_config_model(args, config, model_type, dataset_name):
         config.update({
             'model': dnn_model_params, 
             'name': f'{model_type}-{dataset_name}-l{args.dnn_model_params_layers}-'+
-                    f'units{args.dnn_model_params_units}' 
+                    f'hist{args.dnn_model_params_history}-units{args.dnn_model_params_units}' 
             })
 
     elif model_type == 'CNN':
