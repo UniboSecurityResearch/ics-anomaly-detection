@@ -108,6 +108,19 @@ def main() -> None:
     errors_before, scores_before = evaluate_series(ctx, ctx.x_test)
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    # Save the exact clean/original series used in this experiment.
+    if args.save_series == "full":
+        np.save(output_root / "x_test_original_scaled.npy", ctx.x_test)
+
+    if args.save_raw_csv:
+        raw_original = ctx.scaler.inverse_transform(ctx.x_test)
+        pd.DataFrame(
+            raw_original,
+            columns=ctx.sensor_cols
+        ).to_csv(
+            output_root / "x_test_original_raw.csv",
+            index=False
+        )
     if ctx.thresholds is not None:
         np.save(output_root / "thresholds_used.npy", ctx.thresholds)
     if ctx.kl_reference is not None:

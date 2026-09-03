@@ -207,9 +207,9 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
 
                 #Yhat = event_detector.detect(Xtest, theta = theta, window = window, batches=True)
                 Yhat = event_detector.cached_detect(test_instance_errors, theta = theta, window = window)
-                #Yhat = Yhat[window-1:].astype(int)
+                Yhat_eval, Ytest_val_eval = utils.normalize_array_length(Yhat, Ytest_val)
 
-                choice_value = metric_func(Yhat, Ytest_val)
+                choice_value = metric_func(Yhat_eval, Ytest_val_eval)
 
                 if verbose > 0:
                     print("{} is {:.3f} at theta={:.3f}, percentile={:.4f}, window={}".format(metric, choice_value, theta, percentile, window))
@@ -272,10 +272,10 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
         event_detector.save_detection_params(best_theta=best_theta, best_window=best_window)
 
         final_Yhat = event_detector.best_cached_detect(final_test_instance_errors)
-        #final_Yhat = final_Yhat[best_window-1:].astype(int)
+        final_Yhat_eval, Ytest_test_eval = utils.normalize_array_length(final_Yhat, Ytest_test)
 
         metric_func = metrics.get(metric)
-        final_value = metric_func(final_Yhat, Ytest_test)
+        final_value = metric_func(final_Yhat_eval, Ytest_test_eval)
         print("Final {} is {:.3f} at percentile={:.5f}, window {}".format(metric, final_value, best_percentile, best_window))
 
         if grid_config.get('save-metric-info', False):
@@ -467,7 +467,7 @@ if __name__ == "__main__":
         event_detector = train_forecast_model_by_idxs(model_type, config, Xfull, train_idxs, val_idxs)
 
         # Search for the best tuning of the window and theta parameters
-        hyperparameter_search(event_detector, model_type, config, Xfull, val_idxs, Xtest, Ytest, dataset_name,
+        hyperparameter_search(event_detector, model_type, config, Xfull, Xtest, Ytest, dataset_name,
             val_idxs=val_idxs,
             test_split=test_split,
             run_name=run_name,
