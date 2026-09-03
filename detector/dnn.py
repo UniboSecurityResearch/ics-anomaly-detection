@@ -66,8 +66,8 @@ class DeepNN(ICSDetector):
 
         # retrieve params
         nI = self.params['nI'] # number of inputs
+        history = self.params['history'] # number of timesteps in the input window
         units = self.params['units'] # number of units per layer
-        history = self.params['history']
         layers = self.params['layers'] # Number of hidden layers
         activation = self.params['activation'] # Activation function between layers
         optimizer = self.params['optimizer'] # Keras optimizer
@@ -101,16 +101,15 @@ class DeepNN(ICSDetector):
     def transform_to_window_data(self, dataset, target, target_size=1):
         data = []
         labels = []
-        
+    
         history = self.params['history']
-
         start_index = history
         end_index = len(dataset) - target_size
 
         for i in range(start_index, end_index):
             indices = range(i - history, i)
             data.append(dataset[indices])
-            labels.append(target[i+target_size])
+            labels.append(target[i + target_size])
 
         return np.array(data), np.array(labels)
 
@@ -253,24 +252,22 @@ class DeepNN(ICSDetector):
         
         if batches:
             
+            # Length of reconstruction errors is len(x) - history - 1, clipped from the front.
             full_errors = np.zeros((x.shape[0] - self.params['history'] - 1, x.shape[1]))
             idx = 0
             
-            while idx < len(x):
-                
-                Xwindow, Ywindow = self.transform_to_window_data(x[idx: idx + eval_batch_size + self.params['history'] + 1], x[idx:idx + eval_batch_size + self.params['history'] + 1])
+            while idx < len(full_errors):
+                stop = idx + eval_batch_size + self.params['history'] + 1
+                Xwindow, Ywindow = self.transform_to_window_data(x[idx:stop], x[idx:stop])
+                errors = (self.predict(Xwindow, **keras_params) - Ywindow)**2
 
-                if idx + eval_batch_size > len(full_errors):
-                    full_errors[idx:] = (self.predict(Xwindow, **keras_params) - Ywindow)**2                
-                else:
-                    full_errors[idx:idx+eval_batch_size] = (self.predict(Xwindow, **keras_params) - Ywindow)**2
-                
+                end = min(idx + len(errors), len(full_errors))
+                full_errors[idx:end] = errors[:end - idx]
                 idx += eval_batch_size
 
             return full_errors
 
         else:
-            # CNN needs windowed data
             Xwindow, Ywindow = self.transform_to_window_data(x, x)
             return (self.predict(Xwindow, **keras_params) - Ywindow)**2
 
