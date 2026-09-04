@@ -98,7 +98,11 @@ class WhiteBoxAttack(Attack):
 
         n_iterations = self.iterations(args)
         start_time = time.time()
-        last_loss = math.nan
+        initial_loss = math.nan
+        final_loss = math.nan
+        best_loss = math.inf
+        best_iteration = 0
+        best_adv = tf.identity(x_adv)
 
         for iteration in range(n_iterations):
             with tf.GradientTape() as tape:
@@ -113,6 +117,23 @@ class WhiteBoxAttack(Attack):
                 )
                 loss, report_score = self.objective(ctx, goal, errors, x_adv, x0)
 
+            # The objective is always a scalar loss to MINIMIZE.  Store the
+            # current point before applying the next gradient update.  Iteration
+            # 0 therefore denotes the initial point (clean or random-start),
+            # while iteration k denotes the point after k PGD updates.
+            current_loss = float(loss.numpy())
+            if iteration == 0:
+                initial_loss = current_loss
+            # Keep FGSM unchanged: with one iteration its returned point remains
+            # the full-epsilon point produced by its single gradient update.
+            if n_iterations > 1 and (iteration == 0 or (
+                math.isfinite(current_loss)
+                and (not math.isfinite(best_loss) or current_loss < best_loss)
+            )):
+                best_loss = current_loss
+                best_iteration = iteration
+                best_adv = tf.identity(x_adv)
+
             gradient = tape.gradient(loss, x_adv)
             if gradient is None:
                 raise RuntimeError("Gradient is None; the model is not differentiable end-to-end.")
@@ -124,19 +145,51 @@ class WhiteBoxAttack(Attack):
             x_adv = x_adv - step
             x_adv = tf.clip_by_value(x_adv, lower, upper)
             x_adv = x0 + (x_adv - x0) * mask
-            last_loss = float(loss.numpy())
 
             if iteration == 0 or iteration == n_iterations - 1 or (iteration + 1) % 5 == 0:
                 print(
                     f"[{self.name}/{goal}] iteration {iteration + 1:>3d}/"
-                    f"{n_iterations:<3d} loss={last_loss:.8f} "
+                    f"{n_iterations:<3d} loss={current_loss:.8f} "
                     f"report={float(tf.reduce_mean(report_score).numpy()):.8f}"
                 )
 
+        # The point produced by the last update has not yet been evaluated in
+        # the loop, so evaluate it once and include it in the best-point search.
+        final_errors = model_errors_tf(
+            ctx.adapter.keras_model,
+            x_adv,
+            args.model_type,
+            ctx.target_indices,
+            args.history,
+            args.target_offset,
+        )
+        final_loss_tensor, _ = self.objective(ctx, goal, final_errors, x_adv, x0)
+        final_loss = float(final_loss_tensor.numpy())
+
+        if n_iterations == 0:
+            initial_loss = final_loss
+            best_loss = final_loss
+            best_iteration = 0
+            best_adv = tf.identity(x_adv)
+        elif n_iterations == 1:
+            best_loss = final_loss
+            best_iteration = 1
+            best_adv = tf.identity(x_adv)
+        elif math.isfinite(final_loss) and (
+            not math.isfinite(best_loss) or final_loss < best_loss
+        ):
+            best_loss = final_loss
+            best_iteration = n_iterations
+            best_adv = tf.identity(x_adv)
+
         metadata = {
             "iterations_executed": n_iterations,
-            "final_optimization_loss": last_loss,
+            "initial_optimization_loss": initial_loss,
+            "final_optimization_loss": final_loss,
+            "best_loss": best_loss,
+            "best_iteration": best_iteration,
+            "returned_point": "best_adv",
             "runtime_seconds": time.time() - start_time,
             "query_count": None,
         }
-        return x_adv.numpy(), metadata
+        return best_adv.numpy(), metadata
