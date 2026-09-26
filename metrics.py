@@ -28,6 +28,8 @@ def get(name):
 		return precision
 	elif name == 'recall':
 		return recall
+	elif name == 'false_positive_rate':
+		return false_positive_rate
 	elif name == 'F1':
 		return f1_score
 	elif name == 'FB13':
@@ -79,6 +81,17 @@ def precision(ypred, ytrue):
 
 def recall(ypred, ytrue):
 	return np.mean(ypred[ytrue.astype(bool)] == ytrue[ytrue.astype(bool)])
+	
+def false_positive_rate(ypred, ytrue):
+    ypred = np.asarray(ypred).astype(bool)
+    ytrue = np.asarray(ytrue).astype(bool)
+
+    normal_mask = ~ytrue
+
+    if not np.any(normal_mask):
+        return 0.0
+
+    return np.mean(ypred[normal_mask])
 
 def f1_score(ypred, ytrue):
 	return fb_score(ypred, ytrue, 1)

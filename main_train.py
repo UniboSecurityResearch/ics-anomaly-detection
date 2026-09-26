@@ -30,11 +30,13 @@ import sys
 import json
 import pickle
 import time
+import random
 
 # Data science ML
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import tensorflow as tf
 from sklearn.metrics import f1_score
 
 # Ignore ugly futurewarnings from np vs tf.
@@ -49,10 +51,15 @@ from tensorflow.keras.models import load_model
 # Custom packages
 from detector import autoencoder, lstm, cnn, dnn, gru, identity, linear
 from data_loader import load_train_data, load_test_data
-
 import metrics
 import utils
 
+def set_training_seed(seed):
+    print(f"Training seed: {seed}")
+
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
 
 def train_reconstruction_model(model_type, config, Xtrain, Xval):
 
@@ -175,11 +182,15 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
     cutoffs = grid_config.get('percentile', [0.95])
     windows = grid_config.get('window', [1])
     eval_metrics = grid_config.get('metrics', ['F1'])
+    max_fpr = grid_config.get('max-fpr', None)
 
     firstPlotsError = True
     firstNpysError = True
 
     for metric in eval_metrics:
+    
+        best_fpr = np.inf
+        found_candidate = False
 
         # FPR is a negative metric (lower is better)
         negative_metric = (metric == 'false_positive_rate')
@@ -211,24 +222,60 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
 
                 Yhat = Yhat[window-1:].astype(int)
 
-                Yhat_eval, Ytest_val_eval = utils.normalize_array_length(Yhat, Ytest_val)
+                Yhat_eval, Ytest_val_eval = utils.normalize_array_length(
+                    Yhat, Ytest_val
+                )
 
-                choice_value = metric_func(Yhat_eval, Ytest_val_eval)
+                choice_value = metric_func(
+                    Yhat_eval,
+                    Ytest_val_eval
+                )
+
+                fpr_value = metrics.false_positive_rate(
+                    Yhat_eval,
+                    Ytest_val_eval
+                )
+
+                # Reject threshold/window configurations whose FPR
+                # exceeds the predefined limit.
+                if max_fpr is not None and fpr_value > max_fpr:
+                    if verbose > 0:
+                        print(
+                            "Rejected: metric={:.3f}, FPR={:.3f}, "
+                            "theta={:.6f}, percentile={:.5f}, window={}".format(
+                                choice_value,
+                                fpr_value,
+                                theta,
+                                percentile,
+                                window
+                            )
+                        )
+                    continue
 
                 if verbose > 0:
                     print("{} is {:.3f} at theta={:.3f}, percentile={:.4f}, window={}".format(metric, choice_value, theta, percentile, window))
 
                 # FPR is a negative metric (lower is better)
                 if negative_metric:
-                    if choice_value < best_metric:
-                        best_metric = choice_value
-                        best_percentile = percentile
-                        best_window = window
+                    is_better = choice_value < best_metric
                 else:
-                    if choice_value > best_metric:
-                        best_metric = choice_value
-                        best_percentile = percentile
-                        best_window = window
+                    is_better = choice_value > best_metric
+                
+                # Tie-break: if the main metric is equal,
+                # prefer the configuration with lower FPR.
+                if (
+                    found_candidate
+                    and np.isclose(choice_value, best_metric)
+                    and fpr_value < best_fpr
+                ):
+                    is_better = True
+                
+                if is_better:
+                    best_metric = choice_value
+                    best_percentile = percentile
+                    best_window = window
+                    best_fpr = fpr_value
+                    found_candidate = True
 
                 if grid_config.get('save-metric-info', False):
                     metric_vals[percentile_idx, window_idx] = choice_value
@@ -266,8 +313,23 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
                     pickle.dump(theta, open(f'models/results/{model_name}-{percentile}-theta.pkl', 'wb'))
                     print(f"Directory models/{run_name}/ not found, saved theta to models/results/{model_name}-{percentile}-theta.pkl instead")
 
-        print("Best metric ({}) is {:.3f} at percentile={:.5f}, window {}".format(metric, best_metric, best_percentile, best_window))
-
+        if not found_candidate:
+            raise RuntimeError(
+                f"No detection configuration satisfies max_fpr={max_fpr}. "
+                "Increase --detect_params_max_fpr or expand the percentile grid."
+            )
+            
+        print(
+            "Best metric ({}) is {:.3f} at percentile={:.5f}, "
+            "window={}, FPR={:.5f}".format(
+                metric,
+                best_metric,
+                best_percentile,
+                best_window,
+                best_fpr
+            )
+        )
+        
         # Final test performance
         final_test_errors = event_detector.reconstruction_errors(Xtest_test, batches=do_batches)
         final_test_instance_errors = final_test_errors.mean(axis=1)
@@ -285,8 +347,49 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
 
         metric_func = metrics.get(metric)
         final_value = metric_func(final_Yhat_eval, Ytest_test_eval)
-        print("Final {} is {:.3f} at percentile={:.5f}, window {}".format(metric, final_value, best_percentile, best_window))
 
+        final_fpr = metrics.false_positive_rate(
+            final_Yhat_eval,
+            Ytest_test_eval
+        )
+
+        final_precision = metrics.precision(
+            final_Yhat_eval,
+            Ytest_test_eval
+        )
+
+        final_f1 = metrics.f1_score(
+            final_Yhat_eval,
+            Ytest_test_eval
+        )
+
+        print(
+            "Final {}={:.3f}, FPR={:.5f}, precision={:.3f}, F1={:.3f} "
+            "at theta={:.10f}, percentile={:.5f}, window={}".format(
+                metric,
+                final_value,
+                final_fpr,
+                final_precision,
+                final_f1,
+                best_theta,
+                best_percentile,
+                best_window
+            )
+        )
+
+        # Save threshold-selection and final clean-performance metadata.
+        # These variables belong to hyperparameter_search(), so they must
+        # be stored here before leaving the function.
+        event_detector.params['threshold_percentile'] = float(best_percentile)
+        event_detector.params['threshold_theta'] = float(best_theta)
+        event_detector.params['threshold_window'] = int(best_window)
+        event_detector.params['validation_recall'] = float(best_metric)
+        event_detector.params['validation_fpr'] = float(best_fpr)
+        event_detector.params['final_recall'] = float(final_value)
+        event_detector.params['final_fpr'] = float(final_fpr)
+        event_detector.params['final_precision'] = float(final_precision)
+        event_detector.params['final_f1'] = float(final_f1)
+        
         if grid_config.get('save-metric-info', False):
             try:
                 np.save(f'npys/{run_name}/{model_name}-{metric}.npy', metric_vals)
@@ -354,6 +457,13 @@ def load_saved_model(model_type, run_name, model_name):
 def parse_arguments():
 
     parser = utils.get_argparser()
+    
+    parser.add_argument(
+        "--seed",
+        default=2021,
+        type=int,
+        help="Random seed used for model initialization and training"
+    )
 
     ### Train Params
     parser.add_argument("--train_params_epochs",
@@ -384,6 +494,12 @@ def parse_arguments():
         nargs='+',
         type=str,
         help="Metrics to look over")
+    parser.add_argument(
+        "--detect_params_max_fpr",
+        default=None,
+        type=float,
+        help="Maximum allowed false positive rate during threshold selection"
+    )
     parser.add_argument("--detect_params_test_split",
         default=0.7,
         type=float,
@@ -405,6 +521,7 @@ def parse_arguments():
 if __name__ == "__main__":
 
     args = parse_arguments()
+    set_training_seed(args.seed)
     model_type = args.model
     dataset_name = args.dataset
 
@@ -433,6 +550,7 @@ if __name__ == "__main__":
             'percentile': args.detect_params_percentile,
             'window': args.detect_params_windows,
             'metrics': args.detect_params_metrics,
+            'max-fpr': args.detect_params_max_fpr,
             'pr-plot': False,
             'detection-plots': args.detect_params_plots,
             'save-metric-info': args.detect_params_save_npy,
@@ -481,6 +599,10 @@ if __name__ == "__main__":
             test_split=test_split,
             run_name=run_name,
             verbose=0)
+        
+    event_detector.params['train_seed'] = args.seed
+    event_detector.params['threshold_selection_metric'] = args.detect_params_metrics
+    event_detector.params['threshold_max_fpr'] = args.detect_params_max_fpr
 
     save_model(event_detector, config, run_name=run_name)
 

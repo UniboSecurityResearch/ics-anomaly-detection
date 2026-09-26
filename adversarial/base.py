@@ -76,6 +76,9 @@ class WhiteBoxAttack(Attack):
 
     # --- the loop ---------------------------------------------------------------
     def run(self, ctx: AttackContext, goal: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+        if getattr(ctx.args, "eligible_protocol", False):
+            from .sequence_protocol import run_protocol
+            return run_protocol(self, ctx, goal)
         if ctx.adapter.keras_model is None:
             raise RuntimeError(
                 f"{self.name} requires a differentiable tf.keras.Model. The loaded "

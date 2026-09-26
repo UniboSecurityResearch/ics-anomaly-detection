@@ -335,7 +335,23 @@ def parse_args() -> argparse.Namespace:
         help="Also save the complete adversarial series in physical units as CSV.",
     )
 
+    protocol = parser.add_argument_group("PGD eligible-set evaluation")
+    protocol.add_argument("--eligible-protocol", action="store_true",
+                          help="pgd_mse evasion: fixed clean E, iteration metrics, dual checkpoints.")
+    protocol.add_argument("--restarts", type=int, default=1,
+                          help="Independent initializations with seed + restart; E stays fixed.")
+    protocol.add_argument("--return-point", choices=["best_loss", "best_asr"], default="best_asr",
+                          help="Returned series in eligible protocol; both full checkpoints are always saved.")
     args = parser.parse_args()
+    if args.eligible_protocol:
+        if args.goal != "evasion" or args.attack != "pgd_mse":
+            parser.error("--eligible-protocol requires --attack pgd_mse --goal evasion")
+        if args.instance_threshold is None and args.instance_threshold_percentile is None:
+            parser.error("Eligible protocol requires an instance threshold or percentile")
+    if args.restarts < 1:
+        parser.error("--restarts must be >= 1")
+    if args.restarts > 1 and (not args.eligible_protocol or not args.random_start):
+        parser.error("Multiple restarts require --eligible-protocol and --random-start")
     if args.start is not None and args.end is None:
         parser.error("--start requires --end")
     if args.end is not None and args.start is None:

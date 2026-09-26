@@ -1,39 +1,31 @@
-# Project specific files
-*.npy
-*.csv
-*.pdf
-*.pkl
-*.json
-*.h5
+#
+*.sif
 
-# Byte-compiled / optimized / DLL files
+# 
+slurm.slurm*.*.err
+slurm.slurm*.*.out
+# HPC / Slurm outputs
+slurm*.out
+slurm*.err
+
+# Singularity / Apptainer images
+*.sif
+
+# Generated experiment outputs
+outputs/
+
+# Generated validation results
+gru_validation/
+
+# Python cache
 __pycache__/
 *.py[cod]
-*$py.class
 
-# C extensions
-*.so
+# Training histories / generated CSV logs
+*-train-history-*.csv
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# Local datasets
+data/BATADAL/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -138,3 +130,29 @@ dmypy.json
 
 .claude/
 sip.sbatch
+=======
+# Trained models / checkpoints
+models/BATADAL_scaler.pkl
+models/cnn/
+models/cnn_r1/
+models/cnn_r2/
+models/cnn_r3/
+models/cnn_r4/
+models/cnn_seed1/
+models/cnn_seed21/
+models/cnn_seed42/
+models/cnn_seed7/
+models/cnn_seed99/
+models/cnn_t1/
+models/cnn_t2/
+models/cnn_t3/
+models/cnn_t4/
+models/cnn_t5/
+models/cnn_t6/
+models/cnn_t7/
+models/cnn_t8/
+models/dnn/
+models/gru/
+models/lstm/
+models/results/*.h5
+models/results/*.json

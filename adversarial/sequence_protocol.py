@@ -1,0 +1,129 @@
+"""PGD on frozen clean-detected attack targets, retaining all evaluation targets.
+
+Opt in with --attack pgd_mse --goal evasion --eligible-protocol.
+Use --selection attack --max-targets 0 to retain all attack-labelled targets.
+No structured perturbation: this is the original masked signal-space PGD.
+Loss remains a point-score surrogate; metrics use the full temporal detector.
+Both full checkpoints are saved even when --save-series is none/delta.
+Use a separate output directory for each experiment: filenames are reused.
+"""
+from dataclasses import replace
+from pathlib import Path
+import csv
+import json
+import time
+
+import numpy as np
+import tensorflow as tf
+
+from .detector import windowed_target_detection
+from .errors import model_errors_tf
+from .projection import build_tf_bounds
+from .protocol_metrics import freeze_eligible, iteration_metrics
+from .targets import infer_attack_labels
+
+
+def run_protocol(attack, ctx, goal):
+    args = ctx.args
+    if attack.name != "pgd_mse" or goal != "evasion":
+        raise ValueError("Eligible protocol supports pgd_mse evasion only")
+    if ctx.adapter.keras_model is None or ctx.instance_threshold is None:
+        raise ValueError("A differentiable Keras model and instance threshold are required")
+    eligible = freeze_eligible(ctx.target_indices,
+                              infer_attack_labels(args.dataset, ctx.labels),
+                              ctx.clean_detect_window)
+    # Never replace the original evaluation targets or modification mask.
+    loss_ctx = replace(ctx, target_indices=ctx.target_indices[eligible].copy())
+    x0 = tf.convert_to_tensor(ctx.x_test, tf.float32)
+    mask = tf.convert_to_tensor(ctx.modification_mask, tf.float32)
+    eps, lower, upper = build_tf_bounds(x0, ctx.epsilon, ctx.lower_domain, ctx.upper_domain)
+    active = ctx.modification_mask > 0
+    if not np.all(np.isfinite(ctx.x_test)) or not np.all(np.isfinite(ctx.epsilon)) or np.any(ctx.epsilon < 0):
+        raise ValueError("Input and epsilon must be finite; epsilon must be nonnegative")
+    if np.any((ctx.x_test < lower.numpy())[active]) or np.any((ctx.x_test > upper.numpy())[active]):
+        raise ValueError("Clean modifiable values are outside domain bounds; revise bounds or disable clipping")
+    restarts = int(getattr(args, "restarts", 1))
+    if restarts < 1 or args.iterations < 1 or (restarts > 1 and not args.random_start):
+        raise ValueError("Require positive iterations/restarts and random-start for multiple restarts")
+    run_dir = Path(args.output_dir) / attack.name / goal
+    run_dir.mkdir(parents=True, exist_ok=True)
+    np.save(run_dir / "eligible_indices.npy", loss_ctx.target_indices)
+    np.save(run_dir / "eligible_mask.npy", eligible)
+    np.save(run_dir / "evaluation_target_indices.npy", ctx.target_indices)
+    best = {}
+    started = time.time()
+
+    def objective(series):
+        errors = model_errors_tf(ctx.adapter.keras_model, series, args.model_type,
+                                 loss_ctx.target_indices, args.history, args.target_offset)
+        return attack.objective(loss_ctx, goal, errors, series, x0)[0]
+
+    def record(series, loss, restart, iteration, phase):
+        loss = float(loss)
+        if not np.isfinite(loss):
+            raise ValueError("Non-finite optimization loss")
+        candidate = series.numpy()
+        delta = candidate - ctx.x_test
+        if np.any(np.abs(delta) > ctx.epsilon[None, :] + 1e-5) or np.any(delta[~active] != 0):
+            raise RuntimeError("Perturbation violates budget or modification mask")
+        _, detected = windowed_target_detection(ctx, candidate)
+        stats = iteration_metrics(eligible, detected)
+        row = dict(restart=restart, seed=args.seed + max(restart, 0),
+                   iteration=iteration, phase=phase, loss=loss, **stats)
+        writer.writerow(row)
+        trace_file.flush()
+        for key in ("best_loss", "best_asr"):
+            old = best.get(key)
+            improved = old is None
+            if old is not None:
+                improved = (loss < old["loss"] if key == "best_loss" else
+                            (stats["evasions"], -loss) > (old["evasions"], -old["loss"]))
+            if improved:
+                best[key] = row.copy()
+                np.save(run_dir / (key + "_scaled.npy"), candidate)
+        with (run_dir / "checkpoint_metrics.json").open("w") as handle:
+            json.dump(best, handle, indent=2)
+        print(f"[pgd_mse] restart={restart} iteration={iteration} {phase} loss={loss:.8f} "
+              f"evasions={stats['evasions']}/{stats['eligible_targets']} "
+              f"ASR={stats['asr']:.4f} DR={stats['detection_rate']:.4f}", flush=True)
+
+    fields = ["restart", "seed", "iteration", "phase", "loss", "evasions", "asr",
+              "detection_rate", "detected_targets", "eligible_targets", "targets"]
+    with (run_dir / "iteration_metrics.csv").open("w", newline="") as trace_file:
+        writer = csv.DictWriter(trace_file, fieldnames=fields)
+        writer.writeheader()
+        initial_loss = float(objective(x0).numpy())
+        # Clean is a candidate too. Equal ASR prefers lower loss; exact ties keep first.
+        record(x0, initial_loss, -1, 0, "clean")
+        for restart in range(restarts):
+            tf.random.set_seed(args.seed + restart)
+            series = tf.identity(x0)
+            if args.random_start:
+                series = x0 + tf.random.uniform(tf.shape(x0), -1., 1.) * eps * mask
+                series = x0 + (tf.clip_by_value(series, lower, upper) - x0) * mask
+            for iteration in range(args.iterations + 1):
+                with tf.GradientTape() as tape:
+                    tape.watch(series)
+                    loss = objective(series)
+                final_loss = float(loss.numpy())
+                record(series, final_loss, restart, iteration, "trajectory")
+                if iteration == args.iterations:
+                    break
+                gradient = tape.gradient(loss, series)
+                if gradient is None:
+                    raise RuntimeError("Missing gradient")
+                gradient = tf.convert_to_tensor(gradient) * mask
+                tf.debugging.assert_all_finite(gradient, "Non-finite gradient")
+                updated = tf.clip_by_value(series - args.alpha * tf.sign(gradient), lower, upper)
+                series = x0 + (updated - x0) * mask
+
+    returned = getattr(args, "return_point", "best_asr")
+    metadata = dict(iterations_executed=args.iterations * restarts, restarts=restarts,
+                    initial_optimization_loss=initial_loss, final_optimization_loss=final_loss,
+                    best_loss=best["best_loss"]["loss"], best_iteration=best["best_loss"]["iteration"],
+                    best_loss_restart=best["best_loss"]["restart"],
+                    best_asr=best["best_asr"]["asr"], best_asr_iteration=best["best_asr"]["iteration"],
+                    best_asr_restart=best["best_asr"]["restart"], returned_point=returned,
+                    eligible_protocol=True, runtime_seconds=time.time() - started,
+                    query_count=None, checkpoints=best)
+    return np.load(run_dir / (returned + "_scaled.npy")), metadata
