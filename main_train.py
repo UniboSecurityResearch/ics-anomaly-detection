@@ -143,9 +143,10 @@ def train_forecast_model_by_idxs(model_type, config, Xfull, train_idxs, val_idxs
 
     event_detector.create_model()
     
-    event_detector.train_by_idx(Xfull, train_idxs, val_idxs,
-            validation_data=True,
-            **train_params)
+    if model_type != 'ID':
+        event_detector.train_by_idx(Xfull, train_idxs, val_idxs,
+                validation_data=True,
+                **train_params)
 
     return event_detector
 

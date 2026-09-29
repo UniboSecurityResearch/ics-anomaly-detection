@@ -72,7 +72,15 @@ class Linear(ICSDetector):
         
         # Define the total model
         model = Model(input_layer, output_layer)
-        model.compile(loss='mean_squared_error', optimizer=optimizer)
+        from tensorflow.keras import optimizers as _no_xla_optimizers
+        _no_xla_optimizer = _no_xla_optimizers.get(optimizer)
+        if hasattr(_no_xla_optimizer, 'jit_compile'):
+            _no_xla_optimizer.jit_compile = False
+        model.compile(
+            loss='mean_squared_error',
+            optimizer=_no_xla_optimizer,
+            jit_compile=False
+        )
 
         if verbose:
             print(model.summary())
