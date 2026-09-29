@@ -93,7 +93,12 @@ class ConvNN(ICSDetector):
         
         # Define the total model
         model = Model(input_layer, dense_out)
-        model.compile(loss='mean_squared_error', optimizer=optimizer)
+        # Disable XLA without changing the configured optimizer or loss.
+        from tensorflow.keras import optimizers as _cnn_no_xla_optimizers
+        _cnn_no_xla_optimizer = _cnn_no_xla_optimizers.get(optimizer)
+        if hasattr(_cnn_no_xla_optimizer, 'jit_compile'):
+            _cnn_no_xla_optimizer.jit_compile = False
+        model.compile(loss='mean_squared_error', optimizer=_cnn_no_xla_optimizer, jit_compile=False)
 
         if verbose:
             print(model.summary())

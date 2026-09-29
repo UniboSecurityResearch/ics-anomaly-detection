@@ -156,3 +156,7 @@ models/gru/
 models/lstm/
 models/results/*.h5
 models/results/*.json
+
+/data/SWAT/csv_normalized_*/
+/data/SWAT/*.csv
+/detector/cnn_before_no_xla_*/
