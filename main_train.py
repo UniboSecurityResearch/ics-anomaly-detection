@@ -159,7 +159,7 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
 
     if not model_type == 'AE':
 
-        history = event_detector.params['history']
+        history = event_detector.params.get('history', 0)
 
         # Clip the prediction to match LSTM prediction window
         Ytest_test = Ytest_test[history + 1:]
@@ -583,7 +583,7 @@ if __name__ == "__main__":
 
     else:
 
-        history = config['model']['history']
+        history = config['model'].get('history', 0)
     
         train_idxs, val_idxs = utils.train_val_history_idx_split(Xfull, history)
 

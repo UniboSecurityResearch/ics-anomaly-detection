@@ -97,7 +97,15 @@ class GatedRecurrentUnit(ICSDetector):
         dense_out = Dense(nI)(lstmlayer)
 
         model = Model(input_layer, dense_out)
-        model.compile(loss='mae', optimizer=optimizer)
+        from tensorflow.keras import optimizers as _no_xla_optimizers
+        _no_xla_optimizer = _no_xla_optimizers.get(optimizer)
+        if hasattr(_no_xla_optimizer, 'jit_compile'):
+            _no_xla_optimizer.jit_compile = False
+        model.compile(
+            loss='mae',
+            optimizer=_no_xla_optimizer,
+            jit_compile=False
+        )
 
         if verbose:
             print(model.summary())

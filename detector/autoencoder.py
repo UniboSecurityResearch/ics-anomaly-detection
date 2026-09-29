@@ -112,7 +112,15 @@ class AEED(ICSDetector):
             print(autoencoder.summary())
 
         # compile and return model
-        autoencoder.compile(optimizer=optimizer, loss='mean_squared_error')
+        from tensorflow.keras import optimizers as _no_xla_optimizers
+        _no_xla_optimizer = _no_xla_optimizers.get(optimizer)
+        if hasattr(_no_xla_optimizer, 'jit_compile'):
+            _no_xla_optimizer.jit_compile = False
+        autoencoder.compile(
+            optimizer=_no_xla_optimizer,
+            loss='mean_squared_error',
+            jit_compile=False
+        )
         self.inner = autoencoder
         return autoencoder
 
