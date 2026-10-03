@@ -35,12 +35,36 @@ def normalize_array_length(arr1, arr2):
 
     return arr1, arr2        
 
-def train_val_history_idx_split(Xfull, history, train_size=0.8, shuffle=True):
-	
-	val_size = 1 - train_size
-	all_idxs = np.arange(history, len(Xfull)-1)
-	train_idxs, val_idxs, _, _ = train_test_split(all_idxs, all_idxs, test_size=val_size, random_state=42, shuffle=shuffle)	
-	return train_idxs, val_idxs
+def train_val_history_idx_split(
+        Xfull,
+        history,
+        train_size=0.8,
+        shuffle=False
+    ):
+    """Chronological train/validation split for forecasting models.
+
+    A gap equal to history prevents validation windows from overlapping
+    the training portion of the time series.
+    """
+
+    # Keep the last index unused because LIN predicts idx + 1.
+    last_idx = len(Xfull) - 1
+
+    split_idx = int(last_idx * train_size)
+
+    train_idxs = np.arange(history, split_idx)
+
+    # First validation window starts completely after the training region.
+    val_start = split_idx + history
+    val_idxs = np.arange(val_start, last_idx)
+
+    if len(train_idxs) == 0 or len(val_idxs) == 0:
+        raise ValueError(
+            "Not enough samples for chronological train/validation split: "
+            f"len={len(Xfull)}, history={history}"
+        )
+
+    return train_idxs, val_idxs
 
 
 def transform_to_window_data(dataset, target, history, target_size=1):

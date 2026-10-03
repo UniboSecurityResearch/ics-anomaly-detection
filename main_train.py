@@ -623,7 +623,7 @@ if __name__ == "__main__":
     # Updates training parameters such as batch size, learning rate, etc.
     if model_type == 'AE':
         config.update({'train': ae_train_params})
-        Xtrain, Xval, _, _  = train_test_split(Xfull, Xfull, test_size=0.2, random_state=42, shuffle=True)
+        Xtrain, Xval, _, _  = train_test_split(Xfull, Xfull, test_size=0.2, random_state=42, shuffle=False)
         event_detector = train_reconstruction_model(model_type, config, Xtrain, Xval)
 
         # Search for the best tuning of the window and theta parameters
@@ -636,7 +636,9 @@ if __name__ == "__main__":
 
         history = config['model'].get('history', 0)
     
-        train_idxs, val_idxs = utils.train_val_history_idx_split(Xfull, history)
+        train_idxs, val_idxs = utils.train_val_history_idx_split(
+            Xfull, history, shuffle=False
+        )
 
         large_train_params['steps_per_epoch'] = len(train_idxs) // large_train_params['batch_size']
         large_train_params['validation_steps'] = len(val_idxs) // large_train_params['batch_size']
