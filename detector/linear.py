@@ -103,54 +103,60 @@ class Linear(ICSDetector):
         return np.array(data), np.array(labels)
 
     def train(self, Xtrain, Ytrain, use_callbacks=False, **train_params):
-        """ Train DNN,
+        """Train the linear one-step predictor directly on arrays.
 
-            Xtrain: inputs (n, history, dim)
-            Ytrain: outputs (the next forecasted value).
+        Xtrain contains X[t] and Ytrain contains X[t+1].
+        A generator is unnecessary for this model.
         """
 
-        if self.inner == None:
+        if self.inner is None:
             print('Creating model.')
             self.create_model()
 
-        if 'batch_size' not in train_params:
-            batch_size = 32 
-        else:
-            # A bit hacky, since we have to manually do the batching for CNN/LSTM.
-            batch_size = train_params['batch_size']
-            del train_params['batch_size']
-
-        # Generic data generator object for feeding data to fit_generator
-        def data_generator(X, Y, bs):
-            
-            i = 0
-            while True:
-                i += bs
-
-                # Restart from beginning
-                if i + bs > len(X):
-                    i = 0 
-
-                X_window = X[i:i+bs]
-                y_window = Y[i:i+bs]
-                yield (X_window, y_window)
+        # These parameters are only required by the infinite generators used
+        # by the sequence models. Direct array training must not use them.
+        train_params.pop('steps_per_epoch', None)
+        train_params.pop('validation_steps', None)
 
         if use_callbacks:
             train_params['callbacks'] = [
-                EarlyStopping(monitor='val_loss', patience=3, verbose=0,  min_delta=0, mode='auto', restore_best_weights=True)
+                EarlyStopping(
+                    monitor='val_loss',
+                    patience=3,
+                    verbose=0,
+                    min_delta=0,
+                    mode='auto',
+                    restore_best_weights=True
+                )
             ]
 
-        if 'validation_data' in train_params:        
-            Xval = train_params['validation_data'][0]
-            Yval = train_params['validation_data'][1]
-            train_params['validation_data'] = data_generator(Xval, Yval, batch_size)
+        # Preserve the ordering of the time-series pairs.
+        train_params.setdefault('shuffle', False)
 
-        train_history = self.inner.fit(data_generator(Xtrain, Ytrain, batch_size), **train_params)
-    
-        # Save losses to CSV
-        if self.params['verbose'] > 0:        
-            loss_obj = np.vstack([train_history.history['loss'], train_history.history['val_loss']])
-            np.savetxt(f'linear-train-history.csv', loss_obj, delimiter=',', fmt='%.5f')
+        train_history = self.inner.fit(
+            Xtrain,
+            Ytrain,
+            **train_params
+        )
+
+        # Save losses to CSV.
+        if self.params['verbose'] > 0:
+            if 'val_loss' in train_history.history:
+                loss_obj = np.vstack([
+                    train_history.history['loss'],
+                    train_history.history['val_loss']
+                ])
+            else:
+                loss_obj = np.asarray(
+                    train_history.history['loss']
+                )[None, :]
+
+            np.savetxt(
+                'linear-train-history.csv',
+                loss_obj,
+                delimiter=',',
+                fmt='%.5f'
+            )
 
     def train_by_idx(self, Xfull, train_idxs, val_idxs, use_callbacks=False, **train_params):
         """ Train CNN, but do indexing in batches

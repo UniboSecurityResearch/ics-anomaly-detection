@@ -142,11 +142,31 @@ def train_forecast_model_by_idxs(model_type, config, Xfull, train_idxs, val_idxs
         return
 
     event_detector.create_model()
-    
-    if model_type != 'ID':
-        event_detector.train_by_idx(Xfull, train_idxs, val_idxs,
-                validation_data=True,
-                **train_params)
+
+    if model_type == 'LIN':
+        # LIN is a one-step predictor: X[t] -> X[t+1].
+        # Do not use the history-window generator.
+        lin_train_params = dict(train_params)
+        lin_train_params.pop('steps_per_epoch', None)
+        lin_train_params.pop('validation_steps', None)
+
+        event_detector.train(
+            Xfull[train_idxs],
+            Xfull[train_idxs + 1],
+            validation_data=(Xfull[val_idxs], Xfull[val_idxs + 1]),
+            **lin_train_params
+        )
+
+    elif model_type == 'ID':
+        # Identity baseline has no trainable parameters.
+        pass
+
+    else:
+        event_detector.train_by_idx(
+            Xfull, train_idxs, val_idxs,
+            validation_data=True,
+            **train_params
+        )
 
     return event_detector
 
@@ -170,10 +190,26 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
     ##### Cross Validation
     if val_idxs is None:
         validation_errors = event_detector.reconstruction_errors(Xval, batches=do_batches)
+    elif model_type in ('LIN', 'ID'):
+        # One-step baselines: predict X[t+1] directly from X[t].
+        Xv = Xval[val_idxs]
+        Yv = Xval[val_idxs + 1]
+        validation_errors = (event_detector.predict(Xv) - Yv) ** 2
     else:
-        validation_errors = utils.reconstruction_errors_by_idxs(event_detector, Xval, val_idxs, history)
+        validation_errors = utils.reconstruction_errors_by_idxs(
+            event_detector, Xval, val_idxs, history
+        )
     
-    test_errors = event_detector.reconstruction_errors(Xtest_val, batches=do_batches)
+    if model_type == 'LIN':
+        # Linear baseline is a one-step predictor: X[t] -> X[t+1].
+        test_errors = (
+            event_detector.predict(Xtest_val[:-1]) - Xtest_val[1:]
+        ) ** 2
+    else:
+        test_errors = event_detector.reconstruction_errors(
+            Xtest_val,
+            batches=do_batches
+        )
     test_instance_errors = test_errors.mean(axis=1)
     test_instance_errors, Ytest_val = utils.normalize_array_length(test_instance_errors, Ytest_val)
 
@@ -332,7 +368,15 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
         )
         
         # Final test performance
-        final_test_errors = event_detector.reconstruction_errors(Xtest_test, batches=do_batches)
+        if model_type == 'LIN':
+            final_test_errors = (
+                event_detector.predict(Xtest_test[:-1]) - Xtest_test[1:]
+            ) ** 2
+        else:
+            final_test_errors = event_detector.reconstruction_errors(
+                Xtest_test,
+                batches=do_batches
+            )
         final_test_instance_errors = final_test_errors.mean(axis=1)
         
         final_test_instance_errors, Ytest_test = utils.normalize_array_length(final_test_instance_errors, Ytest_test)
@@ -605,6 +649,7 @@ if __name__ == "__main__":
     event_detector.params['threshold_selection_metric'] = args.detect_params_metrics
     event_detector.params['threshold_max_fpr'] = args.detect_params_max_fpr
 
-    save_model(event_detector, config, run_name=run_name)
+    if model_type != 'ID':
+        save_model(event_detector, config, run_name=run_name)
 
     print("Finished!")
