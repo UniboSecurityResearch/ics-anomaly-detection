@@ -183,8 +183,14 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
         history = event_detector.params.get('history', 0)
 
         # Clip the prediction to match LSTM prediction window
-        Ytest_test = Ytest_test[history + 1:]
-        Ytest_val = Ytest_val[history + 1:]
+        if model_type in ('LIN', 'ID'):
+            # One-step baselines consume X[t] and predict/evaluate t+1.
+            Ytest_test = Ytest_test[1:]
+            Ytest_val = Ytest_val[1:]
+        else:
+            # Forecast window X[t-history:t] predicts X[t].
+            Ytest_test = Ytest_test[history:]
+            Ytest_val = Ytest_val[history:]
         do_batches = True
 
     ##### Cross Validation

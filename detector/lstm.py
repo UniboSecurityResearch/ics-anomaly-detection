@@ -121,12 +121,12 @@ class LongShortTermMemory(ICSDetector):
         history = self.params['history']
 
         start_index = history
-        end_index = len(dataset) - target_size
+        end_index = len(dataset) - target_size + 1
 
         for i in range(start_index, end_index):
             indices = range(i - history, i)
             data.append(dataset[indices])
-            labels.append(target[i+target_size])
+            labels.append(target[i + target_size - 1])
 
         return np.array(data), np.array(labels)
 
@@ -215,7 +215,7 @@ class LongShortTermMemory(ICSDetector):
                 for b in range(bs):
                     lead_idx = idxs[i+b]
                     X_batch.append(X[lead_idx-self.params['history']:lead_idx])
-                    Y_batch.append(X[lead_idx+1])
+                    Y_batch.append(X[lead_idx])
 
                 yield (np.array(X_batch), np.array(Y_batch))
 
@@ -277,12 +277,12 @@ class LongShortTermMemory(ICSDetector):
         
         if batches:
             
-            full_errors = np.zeros((x.shape[0] - self.params['history'] - 1, x.shape[1]))
+            full_errors = np.zeros((x.shape[0] - self.params['history'], x.shape[1]))
             idx = 0
             
-            while idx < len(x):
+            while idx < len(full_errors):
                 
-                Xwindow, Ywindow = self.transform_to_window_data(x[idx: idx + eval_batch_size + self.params['history'] + 1], x[idx:idx + eval_batch_size + self.params['history'] + 1])
+                Xwindow, Ywindow = self.transform_to_window_data(x[idx: idx + eval_batch_size + self.params['history']], x[idx:idx + eval_batch_size + self.params['history'] + 1])
 
                 if idx + eval_batch_size > len(full_errors):
                     full_errors[idx:] = (self.predict(Xwindow, **keras_params) - Ywindow)**2                

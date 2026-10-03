@@ -48,12 +48,12 @@ def transform_to_window_data(dataset, target, history, target_size=1):
 		targets = []
 
 		start_index = history
-		end_index = len(dataset) - target_size
+		end_index = len(dataset) - target_size + 1
 
 		for i in range(start_index, end_index):
 			indices = range(i - history, i)
 			data.append(dataset[indices])
-			targets.append(target[i+target_size])
+			targets.append(target[i + target_size - 1])
 
 		return np.array(data), np.array(targets)
 
@@ -77,7 +77,7 @@ def reconstruction_errors_by_idxs(event_detector, Xfull, idxs, history, bs=4096)
             
             lead_idx = idxs[idx+b]
             Xbatch.append(Xfull[lead_idx-history:lead_idx])
-            Ybatch.append(Xfull[lead_idx+1])
+            Ybatch.append(Xfull[lead_idx])
 
         Xbatch = np.array(Xbatch)
         Ybatch = np.array(Ybatch)
