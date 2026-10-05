@@ -18,14 +18,20 @@ from .constants import POINT_MODELS
 def infer_attack_labels(dataset: str, labels: np.ndarray) -> np.ndarray:
     labels = np.asarray(labels)
     text = np.char.lower(labels.astype(str))
-    if dataset.startswith("SWAT"):
-        return np.char.find(text, "attack") >= 0
-
     numeric: Optional[np.ndarray]
     try:
         numeric = labels.astype(float)
     except (TypeError, ValueError):
         numeric = None
+
+    if dataset.startswith("SWAT"):
+        # Processed SWaT files use numeric labels: 0=normal, 1=attack.
+        # Raw SWaT files may instead contain textual Normal/Attack labels.
+        if numeric is not None:
+            unique = set(np.unique(numeric).tolist())
+            if unique.issubset({0.0, 1.0}):
+                return numeric > 0
+        return np.char.find(text, "attack") >= 0
 
     if dataset == "BATADAL" and numeric is not None:
         return numeric > 0
