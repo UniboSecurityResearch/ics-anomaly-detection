@@ -160,3 +160,11 @@ models/results/*.json
 /data/SWAT/csv_normalized_*/
 /data/SWAT/*.csv
 /detector/cnn_before_no_xla_*/
+
+# HPC experiment artifacts
+slurm.*.out
+slurm.*.err
+.last_*_job
+
+# Generated SWaT preprocessing artifact
+models/SWAT_scaler.pkl
