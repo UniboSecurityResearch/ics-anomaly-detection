@@ -72,6 +72,11 @@ class WhiteBoxAttack(Attack):
         return bool(args.random_start)
 
     def step_multiplier(self, args, eps: tf.Tensor):
+        # --alpha-relative r: step = r * epsilon_j per feature, so features with very
+        # different budgets (range-based epsilon) all reach their bound in ~1/r steps.
+        relative = getattr(args, "alpha_relative", None)
+        if relative is not None:
+            return float(relative) * eps
         return args.alpha
 
     # --- the loop ---------------------------------------------------------------

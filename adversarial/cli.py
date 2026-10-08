@@ -173,6 +173,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     budget.add_argument("--alpha", type=float, default=0.01, help="PGD step size.")
+    budget.add_argument(
+        "--alpha-relative",
+        type=float,
+        default=None,
+        help=(
+            "PGD step as a fraction of each feature's epsilon (e.g. 0.1 = epsilon/10). "
+            "Overrides --alpha; use it with per-feature budgets (--epsilon-range-fraction)."
+        ),
+    )
     budget.add_argument("--iterations", type=int, default=20)
     budget.add_argument("--random-start", action="store_true")
     budget.add_argument(

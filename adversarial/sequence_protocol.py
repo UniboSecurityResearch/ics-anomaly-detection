@@ -16,12 +16,12 @@ import time
 import numpy as np
 import tensorflow as tf
 
-from .detector import windowed_target_detection
+from .detector import repo_cached_detect, series_instance_scores, windowed_target_detection
 from .evaluation import load_changed_rows, save_changed_rows
 from .errors import model_errors_tf
 from .projection import build_tf_bounds
 from .protocol_metrics import freeze_eligible, iteration_metrics
-from .targets import infer_attack_labels
+from .targets import infer_attack_labels, valid_target_bounds
 
 
 def run_protocol(attack, ctx, goal):
@@ -56,6 +56,35 @@ def run_protocol(attack, ctx, goal):
     best = {}
     started = time.time()
 
+    # Fast per-iteration detection. The window decision at a target depends only on
+    # point detections within +-margin of it, and those only on the scores there, so
+    # we recompute scores only inside that neighbourhood and reuse the clean scores
+    # elsewhere. This gives exactly the target-level result of
+    # windowed_target_detection while predicting ~10k windows instead of the whole
+    # series. Verified against the full computation on the clean series below.
+    first, last = valid_target_bounds(args.model_type, len(ctx.x_test), args.history,
+                                      args.target_offset)
+    all_indices = np.arange(first, last, dtype=np.int64)
+    clean_scores = series_instance_scores(ctx, ctx.x_test, all_indices)
+    margin = 2 * int(ctx.detection_window) + 2
+    near = np.zeros(len(all_indices), dtype=bool)
+    for t in ctx.target_indices.astype(np.int64) - first:
+        near[max(t - margin, 0):t + margin + 1] = True
+    near_positions = np.flatnonzero(near)
+    near_indices = all_indices[near_positions]
+    target_positions = ctx.target_indices.astype(np.int64) - first
+
+    def fast_target_detection(candidate):
+        scores = clean_scores.copy()
+        scores[near_positions] = series_instance_scores(ctx, candidate, near_indices)
+        window = repo_cached_detect(scores, ctx.instance_threshold,
+                                    ctx.detection_window, args.model_type)
+        return window[target_positions]
+
+    _, full_clean = windowed_target_detection(ctx, ctx.x_test)
+    if not np.array_equal(fast_target_detection(ctx.x_test), full_clean):
+        raise RuntimeError("Fast detection does not reproduce the full detector on the clean series")
+
     def save_checkpoint(directory, key, candidate):
         # Full series only when asked; otherwise just the modified rows (original and
         # adversarial, scaled and raw), which is what explainability needs.
@@ -82,7 +111,7 @@ def run_protocol(attack, ctx, goal):
         delta = candidate - ctx.x_test
         if np.any(np.abs(delta) > ctx.epsilon[None, :] + 1e-5) or np.any(delta[~active] != 0):
             raise RuntimeError("Perturbation violates budget or modification mask")
-        _, detected = windowed_target_detection(ctx, candidate)
+        detected = fast_target_detection(candidate)
         stats = iteration_metrics(eligible, detected)
         row = dict(restart=restart, seed=args.seed + max(restart, 0),
                    iteration=iteration, phase=phase, loss=loss, **stats)
