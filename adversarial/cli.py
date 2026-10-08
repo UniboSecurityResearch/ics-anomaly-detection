@@ -81,7 +81,27 @@ def parse_args() -> argparse.Namespace:
         help="Maximum selected target timesteps; <=0 disables the limit.",
     )
 
+    selection.add_argument(
+        "--target-sampling",
+        choices=["first", "segments"],
+        default="first",
+        help=(
+            "How --max-targets truncates the selection. 'first' keeps the first N "
+            "timesteps (only the earliest attacks). 'segments' takes a contiguous "
+            "block from the middle of every attack so all attacks are represented."
+        ),
+    )
+
     attack = parser.add_argument_group("attack configuration")
+    attack.add_argument(
+        "--hinge-margin",
+        type=float,
+        default=0.9,
+        help=(
+            "pgd_hinge: push each target's score below margin * theta (evasion) or "
+            "above theta / margin (false alarm). Must be in (0, 1]."
+        ),
+    )
     attack.add_argument(
         "--attack",
         choices=ALL_ATTACKS + ["all"],
@@ -364,6 +384,11 @@ def parse_args() -> argparse.Namespace:
         parser.error("--iterations must be positive")
     if args.margin_beta <= 0 or args.kl_temperature <= 0:
         parser.error("--margin-beta and --kl-temperature must be positive")
+    if not 0.0 < args.hinge_margin <= 1.0:
+        parser.error("--hinge-margin must be in (0, 1]")
+    if args.attack == "pgd_hinge" and args.instance_threshold is None \
+            and args.instance_threshold_percentile is None:
+        parser.error("pgd_hinge requires --instance-threshold or --instance-threshold-percentile")
     if args.detection_window <= 0:
         parser.error("--detection-window must be positive")
     return args

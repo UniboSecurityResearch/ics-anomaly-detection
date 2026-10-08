@@ -17,6 +17,7 @@
 """
 
 import argparse
+import os
 import numpy as np
 from sklearn.model_selection import train_test_split
 
@@ -142,10 +143,13 @@ def get_argparser():
         default='results',
         help="Provide a directory name to load or save results in")
 
+    # Default to the GPU that Slurm (or the caller) already exposed; fall back to
+    # CPU ("-1") only when nothing is set. main_*.py write this value back into
+    # CUDA_VISIBLE_DEVICES, so a hard-coded "-1" silently hid every GPU.
     parser.add_argument("--gpus", 
-        help="GPUs to use",
+        help="GPUs to use (default: $CUDA_VISIBLE_DEVICES, or -1 for CPU)",
         type=str,
-        default="-1")
+        default=os.environ.get("CUDA_VISIBLE_DEVICES", "-1"))
 
     ### AUTOENCODERS
     parser.add_argument("--ae_model_params_layers", 

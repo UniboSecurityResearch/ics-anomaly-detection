@@ -170,7 +170,61 @@ def train_forecast_model_by_idxs(model_type, config, Xfull, train_idxs, val_idxs
 
     return event_detector
 
-def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest, dataset_name, val_idxs=None, test_split=0.7, run_name='results', verbose=1):
+def save_feature_error_report(validation_errors, tune_errors, tune_labels,
+                              final_errors, final_labels, feature_names,
+                              model_name, run_name, top=15):
+    """Per-feature mean squared error on benign data: validation (training file)
+    versus the benign rows of the two test splits. A feature whose benign test
+    error is far above its validation error is drifting between the training
+    and test recordings and inflates the false-positive rate."""
+
+    def benign_mean(errors, labels):
+        errors = np.asarray(errors)
+        labels = np.asarray(labels).astype(bool)
+        n = min(len(errors), len(labels))
+        errors, labels = errors[-n:], labels[-n:]
+        if not np.any(~labels):
+            return np.full(errors.shape[1], np.nan)
+        return errors[~labels].mean(axis=0)
+
+    val_mean = np.asarray(validation_errors).mean(axis=0)
+    tune_mean = benign_mean(tune_errors, tune_labels)
+    final_mean = benign_mean(final_errors, final_labels)
+
+    n_features = len(val_mean)
+    if feature_names is None or len(feature_names) != n_features:
+        feature_names = [f'feature_{i}' for i in range(n_features)]
+
+    rows = []
+    for i in range(n_features):
+        rows.append({
+            'feature': str(feature_names[i]),
+            'validation_mse': float(val_mean[i]),
+            'tuning_split_benign_mse': float(tune_mean[i]),
+            'final_split_benign_mse': float(final_mean[i]),
+            'final_over_validation': float(final_mean[i] / max(val_mean[i], 1e-12)),
+            'share_of_final_benign_score': float(final_mean[i] / max(np.nansum(final_mean), 1e-12)),
+        })
+    rows.sort(key=lambda r: -r['final_split_benign_mse'])
+
+    print("Per-feature benign error (top {} by final-split error):".format(top))
+    for r in rows[:top]:
+        print("  {:<14s} val={:.4f} tune={:.4f} final={:.4f} share={:.1%}".format(
+            r['feature'], r['validation_mse'], r['tuning_split_benign_mse'],
+            r['final_split_benign_mse'], r['share_of_final_benign_score']))
+
+    for directory in (f'outputs/{run_name}', 'outputs/results', '.'):
+        try:
+            path = f'{directory}/{model_name}-feature-errors.json'
+            with open(path, 'w') as fd:
+                json.dump(rows, fd, indent=1)
+            print(f'Saved per-feature error report to {path}')
+            break
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+
+
+def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest, dataset_name, val_idxs=None, test_split=0.7, run_name='results', verbose=1, feature_names=None):
 
     model_name = config['name']
     do_batches = False
@@ -434,13 +488,24 @@ def hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest
         event_detector.params['threshold_percentile'] = float(best_percentile)
         event_detector.params['threshold_theta'] = float(best_theta)
         event_detector.params['threshold_window'] = int(best_window)
-        event_detector.params['validation_recall'] = float(best_metric)
+        # best_metric / final_value hold the SELECTION metric (F1, recall, ...),
+        # so store them under that name and compute recall explicitly.
+        final_recall = metrics.recall(final_Yhat_eval, Ytest_test_eval)
+        event_detector.params['selection_metric'] = metric
+        event_detector.params['validation_selection_value'] = float(best_metric)
         event_detector.params['validation_fpr'] = float(best_fpr)
-        event_detector.params['final_recall'] = float(final_value)
+        event_detector.params['final_selection_value'] = float(final_value)
+        event_detector.params['final_recall'] = float(final_recall)
         event_detector.params['final_fpr'] = float(final_fpr)
         event_detector.params['final_precision'] = float(final_precision)
         event_detector.params['final_f1'] = float(final_f1)
         
+        save_feature_error_report(
+            validation_errors, test_errors, Ytest_val,
+            final_test_errors, Ytest_test,
+            feature_names, model_name, run_name
+        )
+
         if grid_config.get('save-metric-info', False):
             try:
                 np.save(f'npys/{run_name}/{model_name}-{metric}.npy', metric_vals)
@@ -630,7 +695,8 @@ if __name__ == "__main__":
         hyperparameter_search(event_detector, model_type, config, Xval, Xtest, Ytest, dataset_name,
             test_split=test_split,
             run_name=run_name,
-            verbose=0)
+            verbose=0,
+            feature_names=sensor_cols)
 
     else:
 
@@ -651,7 +717,8 @@ if __name__ == "__main__":
             val_idxs=val_idxs,
             test_split=test_split,
             run_name=run_name,
-            verbose=0)
+            verbose=0,
+            feature_names=sensor_cols)
         
     event_detector.params['train_seed'] = args.seed
     event_detector.params['threshold_selection_metric'] = args.detect_params_metrics

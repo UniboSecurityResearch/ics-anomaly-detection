@@ -22,7 +22,11 @@ def project_numpy(
         lower = np.maximum(lower, lower_domain[None, :])
     if upper_domain is not None:
         upper = np.minimum(upper, upper_domain[None, :])
-    clipped = np.clip(x_candidate, lower, upper)
+    # Apply the domain bound first and the epsilon box last, exactly like
+    # tf.clip_by_value in the white-box loop (min with upper, then max with
+    # lower). np.clip returned `upper` when a clean value already lay outside
+    # the training range (lower > upper), moving it by far more than epsilon.
+    clipped = np.maximum(np.minimum(x_candidate, upper), lower)
     return x_original + (clipped - x_original) * modification_mask
 
 

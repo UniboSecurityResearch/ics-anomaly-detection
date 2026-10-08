@@ -96,8 +96,45 @@ def select_target_indices(
     if indices.size == 0:
         raise ValueError("No target timesteps matched the requested selection.")
     if args.max_targets > 0 and indices.size > args.max_targets:
-        indices = indices[: args.max_targets]
+        if getattr(args, "target_sampling", "first") == "segments":
+            indices = sample_segment_blocks(indices, args.max_targets)
+        else:
+            indices = indices[: args.max_targets]
     return indices
+
+
+def sample_segment_blocks(indices: np.ndarray, max_targets: int) -> np.ndarray:
+    """Spread the target budget over every contiguous run of selected timesteps
+    (for --selection attack: every attack), taking one contiguous block from the
+    middle of each run. Blocks stay contiguous so the consecutive-window detector
+    is evaluated on realistic stretches; short runs are taken whole and their
+    unused share is redistributed to the longer ones."""
+    breaks = np.flatnonzero(np.diff(indices) != 1) + 1
+    segments = np.split(indices, breaks)
+    lengths = np.array([len(seg) for seg in segments])
+    take = np.zeros(len(segments), dtype=np.int64)
+    remaining = int(max_targets)
+    open_idx = list(range(len(segments)))
+    while remaining > 0 and open_idx:
+        share = max(remaining // len(open_idx), 1)
+        still_open = []
+        for i in open_idx:
+            add = int(min(share, lengths[i] - take[i], remaining))
+            take[i] += add
+            remaining -= add
+            if take[i] < lengths[i]:
+                still_open.append(i)
+            if remaining == 0:
+                break
+        if still_open == open_idx and share == 0:
+            break
+        open_idx = still_open
+    blocks = []
+    for seg, n in zip(segments, take):
+        if n > 0:
+            start = (len(seg) - n) // 2
+            blocks.append(seg[start : start + n])
+    return np.concatenate(blocks).astype(indices.dtype)
 
 
 def build_modification_mask(

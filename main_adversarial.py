@@ -65,6 +65,11 @@ def main() -> None:
         return
 
     attacks = select_attacks(args, ctx.thresholds)
+    if "pgd_hinge" in attacks and ctx.instance_threshold is None:
+        if args.attack != "all":
+            raise ValueError("pgd_hinge requires an instance threshold.")
+        attacks = [name for name in attacks if name != "pgd_hinge"]
+        print("Skipping pgd_hinge: no instance threshold was provided.")
     goals = ["evasion", "false_alarm"] if args.goal == "both" else [args.goal]
 
     whitebox = [name for name in attacks if ATTACKS[name].requires_gradients]

@@ -11,13 +11,14 @@ from ..base import Attack
 from .fgsm_mse import FgsmMse
 from .pgd_mse import PgdMse
 from .pgd_topk import PgdTopk
+from .pgd_hinge import PgdHinge
 from .pgd_margin import PgdMargin
 from .pgd_cw import PgdCw
 from .pgd_kl import PgdKl
 from .corrshift import CorrShift
 
 # Insertion order defines the canonical order used by --attack all.
-_REGISTERED = [FgsmMse, PgdMse, PgdTopk, PgdMargin, PgdCw, PgdKl, CorrShift]
+_REGISTERED = [FgsmMse, PgdMse, PgdTopk, PgdHinge, PgdMargin, PgdCw, PgdKl, CorrShift]
 
 ATTACKS: Dict[str, Type[Attack]] = {cls.name: cls for cls in _REGISTERED}
 ALL_ATTACKS: List[str] = list(ATTACKS)
