@@ -124,7 +124,18 @@ def load_vector(path: str, expected_size: int, name: str) -> np.ndarray:
     return values
 
 
-def load_epsilon(args: argparse.Namespace, n_features: int, scaler: Any) -> np.ndarray:
+def load_epsilon(
+    args: argparse.Namespace,
+    n_features: int,
+    scaler: Any,
+    train_scaled: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    fraction = getattr(args, "epsilon_range_fraction", None)
+    if fraction is not None:
+        if train_scaled is None:
+            raise RuntimeError("--epsilon-range-fraction needs the benign training data.")
+        feature_range = np.max(train_scaled, axis=0) - np.min(train_scaled, axis=0)
+        return (float(fraction) * feature_range).astype(np.float32)
     if args.epsilon_raw_file:
         raw = load_vector(args.epsilon_raw_file, n_features, "raw epsilon vector")
         if np.any(raw < 0):

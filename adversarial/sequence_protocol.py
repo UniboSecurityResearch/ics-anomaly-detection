@@ -17,6 +17,7 @@ import numpy as np
 import tensorflow as tf
 
 from .detector import windowed_target_detection
+from .evaluation import load_changed_rows, save_changed_rows
 from .errors import model_errors_tf
 from .projection import build_tf_bounds
 from .protocol_metrics import freeze_eligible, iteration_metrics
@@ -25,8 +26,10 @@ from .targets import infer_attack_labels
 
 def run_protocol(attack, ctx, goal):
     args = ctx.args
-    if attack.name != "pgd_mse" or goal != "evasion":
-        raise ValueError("Eligible protocol supports pgd_mse evasion only")
+    if not getattr(attack, "requires_gradients", False) or goal != "evasion":
+        raise ValueError("Eligible protocol supports white-box evasion attacks only")
+    n_iterations = int(attack.iterations(args))
+    use_random_start = bool(attack.use_random_start(args))
     if ctx.adapter.keras_model is None or ctx.instance_threshold is None:
         raise ValueError("A differentiable Keras model and instance threshold are required")
     eligible = freeze_eligible(ctx.target_indices,
@@ -43,7 +46,7 @@ def run_protocol(attack, ctx, goal):
     if np.any((ctx.x_test < lower.numpy())[active]) or np.any((ctx.x_test > upper.numpy())[active]):
         raise ValueError("Clean modifiable values are outside domain bounds; revise bounds or disable clipping")
     restarts = int(getattr(args, "restarts", 1))
-    if restarts < 1 or args.iterations < 1 or (restarts > 1 and not args.random_start):
+    if restarts < 1 or n_iterations < 1 or (restarts > 1 and not use_random_start):
         raise ValueError("Require positive iterations/restarts and random-start for multiple restarts")
     run_dir = Path(args.output_dir) / attack.name / goal
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -52,6 +55,19 @@ def run_protocol(attack, ctx, goal):
     np.save(run_dir / "evaluation_target_indices.npy", ctx.target_indices)
     best = {}
     started = time.time()
+
+    def save_checkpoint(directory, key, candidate):
+        # Full series only when asked; otherwise just the modified rows (original and
+        # adversarial, scaled and raw), which is what explainability needs.
+        if args.save_series == "full":
+            np.save(directory / (key + "_scaled.npy"), candidate)
+        save_changed_rows(directory / (key + "_changed_rows.npz"), ctx, candidate)
+
+    def load_checkpoint(directory, key):
+        full = directory / (key + "_scaled.npy")
+        if full.exists():
+            return np.load(full)
+        return load_changed_rows(directory / (key + "_changed_rows.npz"), ctx.x_test)
 
     def objective(series):
         errors = model_errors_tf(ctx.adapter.keras_model, series, args.model_type,
@@ -80,7 +96,7 @@ def run_protocol(attack, ctx, goal):
                             (stats["evasions"], -loss) > (old["evasions"], -old["loss"]))
             if improved:
                 best[key] = row.copy()
-                np.save(run_dir / (key + "_scaled.npy"), candidate)
+                save_checkpoint(run_dir, key, candidate)
         with (run_dir / "checkpoint_metrics.json").open("w") as handle:
             json.dump(best, handle, indent=2)
         print(f"[pgd_mse] restart={restart} iteration={iteration} {phase} loss={loss:.8f} "
@@ -98,27 +114,29 @@ def run_protocol(attack, ctx, goal):
         for restart in range(restarts):
             tf.random.set_seed(args.seed + restart)
             series = tf.identity(x0)
-            if args.random_start:
+            if use_random_start:
                 series = x0 + tf.random.uniform(tf.shape(x0), -1., 1.) * eps * mask
                 series = x0 + (tf.clip_by_value(series, lower, upper) - x0) * mask
-            for iteration in range(args.iterations + 1):
+            for iteration in range(n_iterations + 1):
                 with tf.GradientTape() as tape:
                     tape.watch(series)
                     loss = objective(series)
                 final_loss = float(loss.numpy())
                 record(series, final_loss, restart, iteration, "trajectory")
-                if iteration == args.iterations:
+                if iteration == n_iterations:
                     break
                 gradient = tape.gradient(loss, series)
                 if gradient is None:
                     raise RuntimeError("Missing gradient")
                 gradient = tf.convert_to_tensor(gradient) * mask
                 tf.debugging.assert_all_finite(gradient, "Non-finite gradient")
-                updated = tf.clip_by_value(series - args.alpha * tf.sign(gradient), lower, upper)
+                gradient = attack.process_gradient(ctx, gradient, mask)
+                step = attack.step_multiplier(args, eps)
+                updated = tf.clip_by_value(series - step * tf.sign(gradient), lower, upper)
                 series = x0 + (updated - x0) * mask
 
     returned = getattr(args, "return_point", "best_asr")
-    metadata = dict(iterations_executed=args.iterations * restarts, restarts=restarts,
+    metadata = dict(iterations_executed=n_iterations * restarts, restarts=restarts,
                     initial_optimization_loss=initial_loss, final_optimization_loss=final_loss,
                     best_loss=best["best_loss"]["loss"], best_iteration=best["best_loss"]["iteration"],
                     best_loss_restart=best["best_loss"]["restart"],
@@ -126,4 +144,4 @@ def run_protocol(attack, ctx, goal):
                     best_asr_restart=best["best_asr"]["restart"], returned_point=returned,
                     eligible_protocol=True, runtime_seconds=time.time() - started,
                     query_count=None, checkpoints=best)
-    return np.load(run_dir / (returned + "_scaled.npy")), metadata
+    return load_checkpoint(run_dir, returned), metadata

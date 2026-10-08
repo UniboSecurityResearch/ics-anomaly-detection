@@ -8,7 +8,8 @@ modify. They are model-family aware (point vs sequence) but attack-agnostic.
 from __future__ import annotations
 
 import argparse
-from typing import Optional, Sequence, Set, Tuple
+import re
+from typing import List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -45,6 +46,16 @@ def infer_attack_labels(dataset: str, labels: np.ndarray) -> np.ndarray:
         | (np.char.find(text, "anomal") >= 0)
         | (text == "true")
     )
+
+
+_ACTUATOR_PATTERN = re.compile(r"^(P|MV|UV)\d+$|^STATUS_", re.IGNORECASE)
+
+
+def actuator_indices(sensor_cols: Sequence[str]) -> List[int]:
+    """Indices of actuator features: SWaT/WADI-style pumps, motorised valves and UV
+    units (P101, MV201, UV401, ...) and BATADAL pump/valve STATUS_* columns. Flow
+    readings (FIT*, FLOW_*) are sensors and stay modifiable."""
+    return [i for i, name in enumerate(sensor_cols) if _ACTUATOR_PATTERN.search(str(name))]
 
 
 def parse_protected_cols(spec: str, sensor_cols: Sequence[str]) -> Set[int]:

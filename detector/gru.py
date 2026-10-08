@@ -52,6 +52,7 @@ class GatedRecurrentUnit(ICSDetector):
             'layers': 2,
             'optimizer' : 'adam',
             'activation': 'tanh',
+            'loss': 'mae',
             'verbose' : 0
             }
 
@@ -101,8 +102,10 @@ class GatedRecurrentUnit(ICSDetector):
         _no_xla_optimizer = _no_xla_optimizers.get(optimizer)
         if hasattr(_no_xla_optimizer, 'jit_compile'):
             _no_xla_optimizer.jit_compile = False
+        # 'mae' kept as default for compatibility with earlier runs; 'mse' matches the
+        # squared-error anomaly score used for detection.
         model.compile(
-            loss='mae',
+            loss=self.params.get('loss', 'mae'),
             optimizer=_no_xla_optimizer,
             jit_compile=False
         )

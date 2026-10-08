@@ -154,6 +154,24 @@ def parse_args() -> argparse.Namespace:
             "units. Converted through StandardScaler.scale_ and overrides --epsilon."
         ),
     )
+    budget.add_argument(
+        "--epsilon-range-fraction",
+        type=float,
+        default=None,
+        help=(
+            "Range-based per-feature budget: epsilon_j = fraction * (max_j - min_j) of the "
+            "benign training data (in standardized units). Overrides --epsilon. "
+            "Physical reading: each reading may move by this fraction of its normal range."
+        ),
+    )
+    budget.add_argument(
+        "--protect-actuators",
+        action="store_true",
+        help=(
+            "Never modify actuator features (pumps, motorised valves, UV units: names "
+            "matching P###, MV###, UV###, or STATUS_* for BATADAL). Sensors stay modifiable."
+        ),
+    )
     budget.add_argument("--alpha", type=float, default=0.01, help="PGD step size.")
     budget.add_argument("--iterations", type=int, default=20)
     budget.add_argument("--random-start", action="store_true")
@@ -345,9 +363,13 @@ def parse_args() -> argparse.Namespace:
     output = parser.add_argument_group("saved outputs")
     output.add_argument(
         "--save-series",
-        choices=["full", "delta", "none"],
+        choices=["full", "delta", "changed", "none"],
         default="full",
-        help="Whether to save the complete adversarial series, only delta, or neither.",
+        help=(
+            "full: complete adversarial series; delta: perturbation only; changed: only the "
+            "modified rows (original + adversarial, scaled and raw) in changed_rows.npz, "
+            "small enough for sweeps and for later explainability; none: nothing."
+        ),
     )
     output.add_argument(
         "--save-raw-csv",
@@ -364,12 +386,16 @@ def parse_args() -> argparse.Namespace:
                           help="Returned series in eligible protocol; both full checkpoints are always saved.")
     args = parser.parse_args()
     if args.eligible_protocol:
-        if args.goal != "evasion" or args.attack != "pgd_mse":
-            parser.error("--eligible-protocol requires --attack pgd_mse --goal evasion")
+        if args.goal != "evasion":
+            parser.error("--eligible-protocol requires --goal evasion")
+        if args.attack in ("corrshift", "all"):
+            parser.error("--eligible-protocol needs a single white-box attack (not corrshift/all)")
         if args.instance_threshold is None and args.instance_threshold_percentile is None:
             parser.error("Eligible protocol requires an instance threshold or percentile")
     if args.restarts < 1:
         parser.error("--restarts must be >= 1")
+    if args.epsilon_range_fraction is not None and args.epsilon_range_fraction <= 0:
+        parser.error("--epsilon-range-fraction must be positive")
     if args.restarts > 1 and (not args.eligible_protocol or not args.random_start):
         parser.error("Multiple restarts require --eligible-protocol and --random-start")
     if args.start is not None and args.end is None:

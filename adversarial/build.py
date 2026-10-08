@@ -26,6 +26,7 @@ from .detector import (
 from .io_utils import load_epsilon, load_model_adapter, load_scaler, load_train_scaled
 from .targets import (
     build_modification_mask,
+    actuator_indices,
     parse_protected_cols,
     select_target_indices,
     valid_target_bounds,
@@ -54,6 +55,11 @@ def build_context(args: argparse.Namespace) -> AttackContext:
 
     target_indices = select_target_indices(args, labels, n_rows)
     protected = parse_protected_cols(args.protected_cols, sensor_cols)
+    if getattr(args, "protect_actuators", False):
+        actuators = actuator_indices(sensor_cols)
+        protected |= set(actuators)
+        print(f"Protected actuators ({len(actuators)}): "
+              f"{[sensor_cols[i] for i in actuators]}")
     modification_mask = build_modification_mask(
         args.model_type,
         n_rows,
@@ -67,10 +73,6 @@ def build_context(args: argparse.Namespace) -> AttackContext:
     if not np.any(modification_mask):
         raise ValueError("Modification mask is empty; no cell can be attacked.")
 
-    epsilon = load_epsilon(args, n_features, scaler)
-    if protected:
-        epsilon[list(protected)] = 0.0
-
     requested_attacks = list(ATTACKS) if args.attack == "all" else [args.attack]
     need_train = (
         args.clip_train_range
@@ -79,8 +81,13 @@ def build_context(args: argparse.Namespace) -> AttackContext:
         or args.sanity_check
         or any(ATTACKS[a].requires_train_data for a in requested_attacks)
         or ("pgd_kl" in requested_attacks and args.kl_reference == "auto")
+        or getattr(args, "epsilon_range_fraction", None) is not None
     )
     train_scaled = load_train_scaled(args.dataset, scaler, sensor_cols) if need_train else None
+
+    epsilon = load_epsilon(args, n_features, scaler, train_scaled)
+    if protected:
+        epsilon[list(protected)] = 0.0
 
     lower_domain = None
     upper_domain = None

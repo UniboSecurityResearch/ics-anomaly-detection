@@ -62,6 +62,40 @@ def perturbation_statistics(delta: np.ndarray, modification_mask: np.ndarray) ->
     }
 
 
+def save_changed_rows(path, ctx: AttackContext, x_adv: np.ndarray) -> int:
+    """Save only the rows an attack modified: indices, original and adversarial values
+    in scaled and raw units, plus feature names and the evaluated targets. This is the
+    input for later explainability without storing the whole series per run."""
+    delta = np.asarray(x_adv) - np.asarray(ctx.x_test)
+    rows = np.flatnonzero(np.any(np.abs(delta) > 0, axis=1))
+    original = np.asarray(ctx.x_test)[rows]
+    adversarial = np.asarray(x_adv)[rows]
+    extra = {}
+    if hasattr(ctx.scaler, "inverse_transform") and len(rows):
+        extra = {
+            "original_raw": ctx.scaler.inverse_transform(original),
+            "adversarial_raw": ctx.scaler.inverse_transform(adversarial),
+        }
+    np.savez_compressed(
+        path,
+        row_indices=rows,
+        original_scaled=original,
+        adversarial_scaled=adversarial,
+        sensor_cols=np.asarray(ctx.sensor_cols),
+        target_indices=np.asarray(ctx.target_indices),
+        **extra,
+    )
+    return int(len(rows))
+
+
+def load_changed_rows(path, x_clean: np.ndarray) -> np.ndarray:
+    """Rebuild a full adversarial series from changed_rows.npz and the clean series."""
+    data = np.load(path)
+    series = np.array(x_clean, copy=True)
+    series[data["row_indices"]] = data["adversarial_scaled"]
+    return series
+
+
 def save_run(
     ctx: AttackContext,
     attack_name: str,
@@ -121,6 +155,8 @@ def save_run(
     np.save(run_dir / "target_indices.npy", ctx.target_indices)
     np.save(run_dir / "feature_errors_before.npy", errors_before)
     np.save(run_dir / "feature_errors_after.npy", errors_after)
+    if args.save_series == "changed":
+        save_changed_rows(run_dir / "changed_rows.npz", ctx, x_adv)
     if args.save_series in {"full", "delta"}:
         np.save(run_dir / "delta_scaled.npy", delta)
     if args.save_series == "full":
@@ -270,6 +306,23 @@ def run_sanity_check(ctx: AttackContext) -> None:
         print(
             f"[{label}] detection: attack={det_a:.4f} benign_FP={det_b:.4f} | "
             f"precision={precision:.4f} recall={recall:.4f} F1~={f1:.4f}"
+        )
+    # Same split as training: main_train.py tunes the threshold on one part of the test
+    # file and reports metrics on the rest (utils.custom_train_test_split, test 70%).
+    # SWaT/WADI: tuning = first 30%, final = last 70%. BATADAL: the reverse.
+    n_rows = len(ctx.x_test)
+    n_small = n_rows - int(math.ceil(0.7 * n_rows))
+    if args.dataset == "BATADAL":
+        final_mask = all_indices < (n_rows - int(math.ceil(0.3 * n_rows)))
+    else:
+        final_mask = all_indices >= n_small
+    for label, pred, drop in rows:
+        sel = final_mask.copy()
+        sel[:drop] = False
+        det_a, det_b, precision, recall, f1 = _rates(pred[sel], y_true_full[sel])
+        print(
+            f"[{label} | final split, as in training] detection: attack={det_a:.4f} "
+            f"benign_FP={det_b:.4f} | precision={precision:.4f} recall={recall:.4f} F1~={f1:.4f}"
         )
     print(
         "Compare F1/recall above with main_eval.py's printed value for the SAME "

@@ -188,6 +188,10 @@ def get_argparser():
         default=2,
         type=int,
         help="Number of layers in the GRU")
+    parser.add_argument("--gru_model_params_loss",
+        default="mae",
+        choices=["mae", "mse"],
+        help="GRU training loss. 'mse' matches the squared-error detection score.")
 
     ### DNNs
     parser.add_argument("--dnn_model_params_units", 
@@ -279,13 +283,15 @@ def update_config_model(args, config, model_type, dataset_name):
             'units' : args.gru_model_params_units,
             'history' : args.gru_model_params_history,
             'layers' : args.gru_model_params_layers,
+            'loss' : args.gru_model_params_loss,
             'verbose' : 1
         }    
 
+        loss_tag = '' if args.gru_model_params_loss == 'mae' else f'-{args.gru_model_params_loss}'
         config.update({
             'model': gru_model_params, 
             'name': f'{model_type}-{dataset_name}-l{args.gru_model_params_layers}-'+
-                    f'hist{args.gru_model_params_history}-units{args.gru_model_params_units}' 
+                    f'hist{args.gru_model_params_history}-units{args.gru_model_params_units}{loss_tag}' 
             })
 
     elif model_type == 'LSTM':
