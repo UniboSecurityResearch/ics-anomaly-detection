@@ -20,10 +20,12 @@
 #   budgets: 0-3 range fraction 0.02 / 0.05 / 0.10 / 0.20, actuators protected (main)
 #            4   standardized epsilon 0.10, actuators protected (reference)
 #            5   range fraction 0.10, actuators NOT protected (reference)
-# Per task: sanity check, then FGSM, PGD (step eps/10 or eps/4 x 50 or 200
-# iterations), PGD top-k, all with the PGD loss on the clean-detected set E,
-# 3 restarts, best-loss and best-ASR checkpoints, changed rows saved; plus CorrShift.
-# Pilot first with --array=0-5 (one model, all budgets) to measure the runtime.
+# Per task: sanity check, then FGSM, PGD (step eps/20, eps/10, eps/4; 200 iterations),
+# PGD top-k, all with the PGD loss on the clean-detected set E, perturbing only the
+# rows that feed that loss, 3 restarts, best-loss and best-ASR checkpoints, changed
+# rows saved; plus CorrShift. Fewer iterations: read iteration_metrics.csv up to
+# that iteration (same seeds, so a 50-iteration run is a prefix of the 200 one).
+# v2 (outputs/sweep_v2): attack mask restricted to E; v1 results kept in outputs/sweep.
 
 set -euo pipefail
 REPO=/scratch.hpc/dhyana.schirra/tesi/ics-anomaly-detection
@@ -47,7 +49,7 @@ case "$BUDGET_ID" in
 esac
 
 MODEL_DIR="$REPO/models/$RUN"
-OUT="$REPO/outputs/sweep/$RUN/$BUDGET_TAG"
+OUT="$REPO/outputs/sweep_v2/$RUN/$BUDGET_TAG"
 JSON=$(ls "$MODEL_DIR"/*.json 2>/dev/null | head -1 || true)
 if [[ -z "$JSON" ]]; then echo "ERROR: no model in $MODEL_DIR"; exit 1; fi
 NAME=$(basename "$JSON" .json)
@@ -97,9 +99,8 @@ run() {  # $1 = tag, rest = attack arguments
 "${BASE[@]}" --sanity-check 2>&1 | tee "$OUT/sanity.log"
 
 run fgsm             --attack fgsm_mse "${PROTOCOL[@]}" --restarts 1
-run pgd_r0.10_it50   --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 50  --random-start --restarts 3
+run pgd_r0.05_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.05 --iterations 200 --random-start --restarts 3
 run pgd_r0.10_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 200 --random-start --restarts 3
-run pgd_r0.25_it50   --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.25 --iterations 50  --random-start --restarts 3
 run pgd_r0.25_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.25 --iterations 200 --random-start --restarts 3
 run topk_r0.10_it200 --attack pgd_topk "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 200 --random-start --restarts 3 --top-k 5
 run corrshift        --attack corrshift --goal evasion --corrshift-rounds 3 --corrshift-step 1000 --save-series changed

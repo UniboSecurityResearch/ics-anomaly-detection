@@ -2,7 +2,8 @@
 
 Opt in with --attack pgd_mse --goal evasion --eligible-protocol.
 Use --selection attack --max-targets 0 to retain all attack-labelled targets.
-No structured perturbation: this is the original masked signal-space PGD.
+No structured perturbation: this is the original masked signal-space PGD,
+restricted to the cells that feed the loss on E (see e_mask).
 Loss remains a point-score surrogate; metrics use the full temporal detector.
 Both full checkpoints are saved even when --save-series is none/delta.
 Use a separate output directory for each experiment: filenames are reused.
@@ -21,7 +22,7 @@ from .evaluation import load_changed_rows, save_changed_rows
 from .errors import model_errors_tf
 from .projection import build_tf_bounds
 from .protocol_metrics import freeze_eligible, iteration_metrics
-from .targets import infer_attack_labels, valid_target_bounds
+from .targets import build_modification_mask, infer_attack_labels, valid_target_bounds
 
 
 def run_protocol(attack, ctx, goal):
@@ -38,9 +39,19 @@ def run_protocol(attack, ctx, goal):
     # Never replace the original evaluation targets or modification mask.
     loss_ctx = replace(ctx, target_indices=ctx.target_indices[eligible].copy())
     x0 = tf.convert_to_tensor(ctx.x_test, tf.float32)
-    mask = tf.convert_to_tensor(ctx.modification_mask, tf.float32)
+    # Perturb only the cells that feed the loss on E (E rows, plus their history for
+    # sequence models). The evaluation mask covers all targets; rows of targets the
+    # detector already misses get no gradient, so a random start would leave pure
+    # noise there, raising their scores (and those of neighbouring E windows) for no
+    # attacker benefit. Restricting the mask keeps the attack minimal and honest.
+    e_mask = build_modification_mask(args.model_type, ctx.x_test.shape[0], ctx.x_test.shape[1],
+                                     loss_ctx.target_indices, args.history, args.target_offset,
+                                     args.scope, ctx.protected) * ctx.modification_mask
+    print(f"[eligible] attack mask: {int((e_mask.sum(axis=1) > 0).sum())} rows "
+          f"(evaluation mask: {int((ctx.modification_mask.sum(axis=1) > 0).sum())} rows)", flush=True)
+    mask = tf.convert_to_tensor(e_mask, tf.float32)
     eps, lower, upper = build_tf_bounds(x0, ctx.epsilon, ctx.lower_domain, ctx.upper_domain)
-    active = ctx.modification_mask > 0
+    active = e_mask > 0  # stricter than the evaluation mask; enforced in record()
     if not np.all(np.isfinite(ctx.x_test)) or not np.all(np.isfinite(ctx.epsilon)) or np.any(ctx.epsilon < 0):
         raise ValueError("Input and epsilon must be finite; epsilon must be nonnegative")
     if np.any((ctx.x_test < lower.numpy())[active]) or np.any((ctx.x_test > upper.numpy())[active]):
@@ -52,6 +63,7 @@ def run_protocol(attack, ctx, goal):
     run_dir.mkdir(parents=True, exist_ok=True)
     np.save(run_dir / "eligible_indices.npy", loss_ctx.target_indices)
     np.save(run_dir / "eligible_mask.npy", eligible)
+    np.save(run_dir / "attack_row_mask.npy", e_mask.sum(axis=1) > 0)
     np.save(run_dir / "evaluation_target_indices.npy", ctx.target_indices)
     best = {}
     started = time.time()
