@@ -348,6 +348,19 @@ def parse_args() -> argparse.Namespace:
         help="Standardized step per round; defaults to --alpha.",
     )
     corr.add_argument(
+        "--corrshift-step-relative",
+        type=float,
+        default=None,
+        help="Step per accepted move as a fraction of each feature's epsilon "
+             "(overrides --corrshift-step).",
+    )
+    corr.add_argument(
+        "--corrshift-eligible",
+        action="store_true",
+        help="Evasion: score only the clean-detected targets E and shift only the "
+             "rows feeding them (same protocol as --eligible-protocol).",
+    )
+    corr.add_argument(
         "--corrshift-top-k",
         type=int,
         default=0,

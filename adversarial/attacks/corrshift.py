@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import Any, Dict, Optional, Set, Tuple
 
 import numpy as np
@@ -11,6 +12,8 @@ from ..base import Attack
 from ..context import AttackContext
 from ..errors import detector_score_numpy, model_errors_numpy
 from ..projection import project_numpy
+from ..protocol_metrics import freeze_eligible
+from ..targets import build_modification_mask, infer_attack_labels
 
 
 def corrshift_direction(
@@ -84,17 +87,44 @@ class CorrShift(Attack):
             feature_range = np.max(correlation_data, axis=0) - np.min(correlation_data, axis=0)
             epsilon = args.corrshift_range_fraction * feature_range.astype(np.float32)
 
-        step_scalar = args.alpha if args.corrshift_step is None else args.corrshift_step
-        if step_scalar < 0:
-            raise ValueError("CorrShift step must be non-negative.")
-        step_vector = np.minimum(epsilon, step_scalar).astype(np.float32)
+        relative = getattr(args, "corrshift_step_relative", None)
+        if relative is not None:
+            # Same convention as PGD --alpha-relative: each feature moves r * eps_j per
+            # accepted step, so all features reach their bound after ~1/r steps.
+            if relative <= 0:
+                raise ValueError("--corrshift-step-relative must be positive.")
+            step_vector = (relative * epsilon).astype(np.float32)
+        else:
+            step_scalar = args.alpha if args.corrshift_step is None else args.corrshift_step
+            if step_scalar < 0:
+                raise ValueError("CorrShift step must be non-negative.")
+            step_vector = np.minimum(epsilon, step_scalar).astype(np.float32)
 
-        modifiable_features = np.flatnonzero(np.any(ctx.modification_mask > 0, axis=0))
+        # --corrshift-eligible: same evasion protocol as the white-box attacks. The
+        # score is averaged over the clean-detected targets E only, and only the rows
+        # feeding those scores are shifted. Otherwise the shift is applied to every
+        # target row, including targets the detector already misses, where it can
+        # only create new detections.
+        score_ctx = ctx
+        mask = ctx.modification_mask
+        if getattr(args, "corrshift_eligible", False) and goal == "evasion":
+            eligible = freeze_eligible(ctx.target_indices,
+                                       infer_attack_labels(args.dataset, ctx.labels),
+                                       ctx.clean_detect_window)
+            score_ctx = replace(ctx, target_indices=ctx.target_indices[eligible].copy())
+            mask = build_modification_mask(args.model_type, ctx.x_test.shape[0],
+                                           ctx.x_test.shape[1], score_ctx.target_indices,
+                                           args.history, args.target_offset, args.scope,
+                                           protected) * ctx.modification_mask
+            print(f"[corrshift] eligible protocol: score on {len(score_ctx.target_indices)} "
+                  f"targets, shifting {int((mask.sum(axis=1) > 0).sum())} rows", flush=True)
+
+        modifiable_features = np.flatnonzero(np.any(mask > 0, axis=0))
         if len(modifiable_features) == 0:
             raise ValueError("CorrShift has no modifiable features.")
 
         x_adv = ctx.x_test.copy()
-        best_score = mean_blackbox_score(ctx, x_adv)
+        best_score = mean_blackbox_score(score_ctx, x_adv)
         query_count = 1
         start_time = time.time()
         rounds_completed = 0
@@ -116,16 +146,16 @@ class CorrShift(Attack):
                     continue
                 for orientation in (-1, 1):
                     delta_row = orientation * step_vector * direction
-                    candidate = x_adv + ctx.modification_mask * delta_row[None, :]
+                    candidate = x_adv + mask * delta_row[None, :]
                     candidate = project_numpy(
                         candidate,
                         ctx.x_test,
                         epsilon,
-                        ctx.modification_mask,
+                        mask,
                         ctx.lower_domain,
                         ctx.upper_domain,
                     )
-                    candidate_score = mean_blackbox_score(ctx, candidate)
+                    candidate_score = mean_blackbox_score(score_ctx, candidate)
                     query_count += 1
 
                     improved = (

@@ -26,6 +26,8 @@
 # rows saved; plus CorrShift. Fewer iterations: read iteration_metrics.csv up to
 # that iteration (same seeds, so a 50-iteration run is a prefix of the 200 one).
 # v2 (outputs/sweep_v2): attack mask restricted to E; v1 results kept in outputs/sweep.
+# CorrShift: score on E, shift only E rows, 30 greedy moves of eps/10 (v1 used one
+# full-eps move on all target rows, which never lowered the score: 0 changed cells).
 
 set -euo pipefail
 REPO=/scratch.hpc/dhyana.schirra/tesi/ics-anomaly-detection
@@ -91,6 +93,8 @@ PROTOCOL=(--goal evasion --eligible-protocol --return-point best_asr --save-seri
 
 run() {  # $1 = tag, rest = attack arguments
     local tag="$1"; shift
+    # ONLY=<tag> (sbatch --export=ALL,ONLY=corrshift) reruns a single attack.
+    if [[ -n "${ONLY:-}" && "$tag" != "$ONLY" ]]; then return 0; fi
     echo "===== $tag $(date -Is)"
     mkdir -p "$OUT/$tag"
     "${BASE[@]}" "$@" --output-dir "$OUT/$tag" 2>&1 | tee "$OUT/$tag/run.log"
@@ -103,6 +107,6 @@ run pgd_r0.05_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.05 --
 run pgd_r0.10_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 200 --random-start --restarts 3
 run pgd_r0.25_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.25 --iterations 200 --random-start --restarts 3
 run topk_r0.10_it200 --attack pgd_topk "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 200 --random-start --restarts 3 --top-k 5
-run corrshift        --attack corrshift --goal evasion --corrshift-rounds 3 --corrshift-step 1000 --save-series changed
+run corrshift        --attack corrshift --goal evasion --corrshift-eligible --corrshift-rounds 30 --corrshift-step-relative 0.10 --save-series changed
 
 echo "FINISHED $(date -Is)"
