@@ -90,7 +90,8 @@ def run_protocol(attack, ctx, goal):
         scores = clean_scores.copy()
         scores[near_positions] = series_instance_scores(ctx, candidate, near_indices)
         window = repo_cached_detect(scores, ctx.instance_threshold,
-                                    ctx.detection_window, args.model_type)
+                                    ctx.detection_window, args.model_type,
+                                    getattr(args, "gru_window_rule", "same"))
         return window[target_positions]
 
     _, full_clean = windowed_target_detection(ctx, ctx.x_test)

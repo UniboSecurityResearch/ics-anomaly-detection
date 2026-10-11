@@ -235,6 +235,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     threshold.add_argument(
+        "--gru-window-rule",
+        choices=["same", "legacy"],
+        default="same",
+        help=(
+            "Window rule for GRU. same (default): the centered rule that detector/gru.py "
+            "uses since commit f9dd48b, identical to the other models. legacy: the "
+            "original repository's 'full' convolution with backfill; only for GRU models "
+            "whose theta and window were tuned with it. Ignored for other models."
+        ),
+    )
+    threshold.add_argument(
         "--instance-threshold",
         type=float,
         default=None,

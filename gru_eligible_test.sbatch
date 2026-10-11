@@ -43,6 +43,7 @@ RUN=(
     --target-offset 1
     --instance-threshold 0.54828903
     --detection-window 10
+    --gru-window-rule legacy
     --instance-score mean_mse
 )
 

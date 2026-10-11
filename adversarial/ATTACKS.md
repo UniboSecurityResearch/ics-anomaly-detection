@@ -34,15 +34,17 @@ reset the window counter at the borders.
 
 ### The window per model (mind GRU)
 
-`cached_detect` is **not identical** across models:
+All models share one `cached_detect` rule. GRU used a different one in the original
+repository; `detector/gru.py` dropped it in commit f9dd48b (3 October 2026):
 
 | Model | Window rule (`w>1`) | Source |
 |---|---|---|
-| AE, CNN, LSTM, DNN | `np.convolve(det, ones(w), 'same') // w` (centered window) | `detector/autoencoder.py:160-170` (LSTM's backfill is commented out) |
-| **GRU** | `'full'` + backfill `fill[idx-w:idx]=1`, then `Yhat[w-1:]` | `detector/gru.py:241-262` |
+| AE, CNN, LSTM, DNN, GRU | `np.convolve(det, ones(w), 'same') // w` (centered window) | each model's `cached_detect` |
+| GRU with `--gru-window-rule legacy` | `'full'` + backfill `fill[idx-w:idx]=1`, then `Yhat[w-1:]` | `detector/gru.py` before f9dd48b |
 
-The package selects the correct variant from `--model-type`, so for GRU with `w>1` the
-flagged region is wider (trailing + backfill).
+The default is the centered rule for every model. Pass `--gru-window-rule legacy` only
+for a GRU whose theta and window were tuned with the old rule (trained before f9dd48b);
+its flagged region is wider (the `w` steps before a run, plus the run's first step).
 
 ## Optimization loss vs detector
 

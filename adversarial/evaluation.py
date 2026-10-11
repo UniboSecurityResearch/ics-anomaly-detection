@@ -277,7 +277,8 @@ def run_sanity_check(ctx: AttackContext) -> None:
     all_indices = np.arange(first, last, dtype=np.int64)
     inst = series_instance_scores(ctx, ctx.x_test, all_indices)
     point = inst > theta
-    windowed = repo_cached_detect(inst, theta, window, args.model_type)
+    gru_rule = getattr(args, "gru_window_rule", "same")
+    windowed = repo_cached_detect(inst, theta, window, args.model_type, gru_rule)
 
     attack_mask_full = infer_attack_labels(args.dataset, ctx.labels)
     y_true_full = np.asarray(attack_mask_full[all_indices], dtype=bool)
@@ -294,10 +295,12 @@ def run_sanity_check(ctx: AttackContext) -> None:
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
         return det_attack, det_benign, precision, recall, f1
 
-    # main_eval.py:52 drops the first window-1 samples before scoring. For 'same' models
-    # that shift is not yet applied here, so drop it to mirror main_eval exactly; GRU's
-    # 'full'+backfill path already had Yhat[window-1:] applied inside repo_cached_detect.
-    window_drop = 0 if (window <= 1 or args.model_type == "GRU") else window - 1
+    # main_eval.py:52 drops the first window-1 samples before scoring. For the 'same'
+    # rule that shift is not yet applied here, so drop it to mirror main_eval exactly;
+    # the legacy GRU 'full'+backfill path already had Yhat[window-1:] applied inside
+    # repo_cached_detect.
+    legacy_gru = args.model_type == "GRU" and gru_rule == "legacy"
+    window_drop = 0 if (window <= 1 or legacy_gru) else window - 1
     print(f"evaluated positions   = {len(all_indices)} "
           f"(attack={int(np.sum(y_true_full))}, benign={int(np.sum(~y_true_full))})")
     rows = [("point  (w=1)", point, 0), (f"window (w={window})", windowed, window_drop)]

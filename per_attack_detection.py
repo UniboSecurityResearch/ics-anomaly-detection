@@ -38,7 +38,7 @@ def segments(mask):
     return list(zip(np.flatnonzero(diff == 1), np.flatnonzero(diff == -1)))
 
 
-def analyse(model_dir, dataset, out_dir, batch_size):
+def analyse(model_dir, dataset, out_dir, batch_size, gru_rule="same"):
     jsons = sorted(glob.glob(os.path.join(model_dir, "*.json")))
     if not jsons:
         print(f"SKIP {model_dir}: no .json")
@@ -62,7 +62,7 @@ def analyse(model_dir, dataset, out_dir, batch_size):
     errors = model_errors_numpy(adapter, x_test, model_type, idx, history, target_offset, batch_size)
     scores = instance_detection_scores(errors, "mean_mse")
     flagged = np.zeros(len(x_test), dtype=bool)
-    flagged[idx] = repo_cached_detect(scores, theta, window, model_type)
+    flagged[idx] = repo_cached_detect(scores, theta, window, model_type, gru_rule)
 
     rows = []
     for k, (s, e) in enumerate(segments(attack)):
@@ -102,8 +102,11 @@ def main():
     ap.add_argument("--dataset", default="SWAT-CLEAN")
     ap.add_argument("--out-dir", default="outputs/per_attack")
     ap.add_argument("--batch-size", type=int, default=4096)
+    ap.add_argument("--gru-window-rule", choices=["same", "legacy"], default="same",
+                    help="GRU window rule; see main_adversarial.py --help")
     args = ap.parse_args()
-    summary = [s for s in (analyse(d, args.dataset, args.out_dir, args.batch_size)
+    summary = [s for s in (analyse(d, args.dataset, args.out_dir, args.batch_size,
+                                   args.gru_window_rule)
                            for d in args.model_dirs) if s]
     print("\n=== SUMMARY")
     print("model                     attacks_detected  timestep_recall  false_alarm_runs")

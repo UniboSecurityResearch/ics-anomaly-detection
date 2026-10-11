@@ -324,32 +324,38 @@ def resolve_kl_reference(
 
 
 def repo_cached_detect(
-    instance_scores: np.ndarray, theta: float, window: int, model_type: str = "AE"
+    instance_scores: np.ndarray,
+    theta: float,
+    window: int,
+    model_type: str = "AE",
+    gru_rule: str = "same",
 ) -> np.ndarray:
     """Replicate <model>.cached_detect, returning a boolean array aligned 1:1 with
     ``instance_scores``. Point-wise detection is ``instance_score > theta``.
 
-    For ``window>1`` the repository detectors do NOT all agree:
+    For ``window>1`` every detector in this repository uses the centered rule
+    ``np.convolve(det, ones(w), 'same') // w``: a timestep is flagged only if its
+    full ``w``-long neighbourhood is above theta (autoencoder.py, cnn.py, dnn.py,
+    lstm.py, linear.py and, since commit f9dd48b of 3 October 2026, gru.py).
 
-    * AE / CNN / LSTM / DNN (detector/autoencoder.py:160-170, cnn.py:242-254,
-      lstm.py:245-266 -- its backfill is commented out, dnn.py:235-247): centered
-      ``np.convolve(det, ones(w), 'same') // w`` -- a timestep is flagged only if its
-      full ``w``-long neighbourhood is above theta;
-    * GRU (detector/gru.py:241-262): ``'full'`` convolution PLUS a backfill loop
-      (``fill[idx-w:idx]=1`` for every flagged idx), then main_eval.py aligns it back
-      with ``Yhat[window-1:]`` (main_eval.py:52). GRU therefore flags a much larger
-      (trailing + backfilled) region than the 'same' models.
+    ``gru_rule="legacy"`` reproduces the GRU rule of the original repository, which
+    detector/gru.py used before that commit: ``'full'`` convolution PLUS a backfill
+    loop (``fill[idx-w:idx]=1`` for every flagged idx), realigned with
+    ``Yhat[window-1:]``. It flags the ``w`` steps before a run of ``w`` scores above
+    theta and the first step of the run. Use it only for GRU models whose theta and
+    window were tuned with that rule (trained before f9dd48b).
 
-    We reproduce each exactly so the benchmark's detection/attack-success numbers match
-    main_eval.py per model. This MUST be applied on the whole series and only afterwards
-    restricted to the selected targets, or the window counter resets spuriously.
+    This MUST be applied on the whole series and only afterwards restricted to the
+    selected targets, or the window counter resets spuriously.
     """
     det = np.asarray(instance_scores, dtype=np.float64) > float(theta)
     if window <= 1:
         return det.astype(bool)
-    if model_type == "GRU":
-        # detector/gru.py:250-260 verbatim: 'full' + backfill, then main_eval.py:52
-        # truncation Yhat[window-1:] realigns it 1:1 with the instance positions.
+    if gru_rule not in ("same", "legacy"):
+        raise ValueError(f"Unknown gru_rule: {gru_rule}")
+    if model_type == "GRU" and gru_rule == "legacy":
+        # Original-repository GRU rule: 'full' + backfill, then the truncation
+        # Yhat[window-1:] realigns it 1:1 with the instance positions.
         conv = np.convolve(det.astype(np.float64), np.ones(window), "full") // window
         filled = conv.copy()
         for idx in np.flatnonzero(conv):
@@ -389,7 +395,8 @@ def windowed_target_detection(
     inst = series_instance_scores(ctx, x_series, all_indices)
     point_full = inst > float(ctx.instance_threshold)
     window_full = repo_cached_detect(
-        inst, ctx.instance_threshold, ctx.detection_window, ctx.args.model_type
+        inst, ctx.instance_threshold, ctx.detection_window, ctx.args.model_type,
+        getattr(ctx.args, "gru_window_rule", "same"),
     )
     positions = ctx.target_indices.astype(np.int64) - first
     return point_full[positions], window_full[positions]
