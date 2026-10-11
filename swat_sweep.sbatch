@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:l40s:1
-#SBATCH --array=0-71%4
+#SBATCH --array=0-89%3
 #SBATCH --time=12:00:00
 #SBATCH --mail-type=ALL,ARRAY_TASKS
 #SBATCH --mail-user=dhyana.schirra@studio.unibo.it
@@ -14,8 +14,9 @@
 #SBATCH --output=slurm.swat_sweep.%A_%a.out
 #SBATCH --error=slurm.swat_sweep.%A_%a.err
 
-# Evasion benchmark sweep on the chronological SWAT-CLEAN detectors.
-#   task id -> model  = id / 6  (AE, CNN, DNN, LSTM x training seeds 7, 21, 42)
+# Evasion benchmark sweep on the chronological SWAT-CLEAN detectors (90 tasks).
+# GRU added after the chronological split fixed it (F1 0.852 +- 0.008); AE seed 7 stays tasks 0-5.
+#   task id -> model  = id / 6  (AE, CNN, DNN, LSTM, GRU x training seeds 7, 21, 42)
 #              budget = id % 6
 #   budgets: 0-3 range fraction 0.02 / 0.05 / 0.10 / 0.20, actuators protected (main)
 #            4   standardized epsilon 0.10, actuators protected (reference)
@@ -35,7 +36,7 @@ IMAGE="$REPO/sip.sif"
 
 RUNS=()
 for SEED in 7 21 42; do
-    for M in ae cnn dnn lstm; do
+    for M in ae cnn dnn lstm gru; do
         RUNS+=("swatchrono_${M}_s${SEED}")
     done
 done
