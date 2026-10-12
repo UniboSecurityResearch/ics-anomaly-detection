@@ -67,9 +67,13 @@ HISTORY_ARGS=()
 if [[ "$MODEL" != "AE" ]]; then HISTORY_ARGS=(--history "$HISTORY" --target-offset 0); fi
 
 mkdir -p "$OUT"
-cp "$JSON" "$OUT/model_params.json"
-git -C "$REPO" rev-parse HEAD > "$OUT/git_commit.txt"
-git -C "$REPO" diff > "$OUT/code_changes.patch"
+# With ONLY set (a rerun of some attacks) keep the budget folder's original
+# provenance; each attack folder gets its own git_commit.txt below.
+if [[ -z "${ONLY:-}" ]]; then
+    cp "$JSON" "$OUT/model_params.json"
+    git -C "$REPO" rev-parse HEAD > "$OUT/git_commit.txt"
+    git -C "$REPO" diff > "$OUT/code_changes.patch"
+fi
 echo "RUN=$RUN MODEL=$MODEL BUDGET=$BUDGET_TAG THETA=$THETA WINDOW=$WINDOW HISTORY=$HISTORY"
 echo "HOST=$(hostname) GPU=${CUDA_VISIBLE_DEVICES:-none} START=$(date -Is)"
 
@@ -94,20 +98,33 @@ PROTOCOL=(--goal evasion --eligible-protocol --return-point best_asr --save-seri
 
 run() {  # $1 = tag, rest = attack arguments
     local tag="$1"; shift
-    # ONLY=<tag> (sbatch --export=ALL,ONLY=corrshift) reruns a single attack.
-    if [[ -n "${ONLY:-}" && "$tag" != "$ONLY" ]]; then return 0; fi
+    # ONLY="<tag> [<tag> ...]" (sbatch --export=ALL,ONLY=corrshift) reruns only
+    # the listed attacks.
+    if [[ -n "${ONLY:-}" && " $ONLY " != *" $tag "* ]]; then return 0; fi
     echo "===== $tag $(date -Is)"
     mkdir -p "$OUT/$tag"
+    git -C "$REPO" rev-parse HEAD > "$OUT/$tag/git_commit.txt"
+    git -C "$REPO" diff > "$OUT/$tag/code_changes.patch"
     "${BASE[@]}" "$@" --output-dir "$OUT/$tag" 2>&1 | tee "$OUT/$tag/run.log"
 }
 
-"${BASE[@]}" --sanity-check 2>&1 | tee "$OUT/sanity.log"
+SANITY_LOG="$OUT/sanity.log"
+if [[ -n "${ONLY:-}" ]]; then SANITY_LOG="$OUT/sanity_${ONLY// /_}.log"; fi
+"${BASE[@]}" --sanity-check 2>&1 | tee "$SANITY_LOG"
 
 run fgsm             --attack fgsm_mse "${PROTOCOL[@]}" --restarts 1
 run pgd_r0.05_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.05 --iterations 200 --random-start --restarts 3
 run pgd_r0.10_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 200 --random-start --restarts 3
 run pgd_r0.25_it200  --attack pgd_mse  "${PROTOCOL[@]}" --alpha-relative 0.25 --iterations 200 --random-start --restarts 3
 run topk_r0.10_it200 --attack pgd_topk "${PROTOCOL[@]}" --alpha-relative 0.10 --iterations 200 --random-start --restarts 3 --top-k 5
+# Longer runs, only on request (not part of the 90-task sweep). Same seeds, so the
+# first 200 iterations of pgd_r0.05_it500 repeat pgd_r0.05_it200. pgd_r0.025 has at
+# range 0.20 the same absolute step as pgd_r0.05 at range 0.10. Used for range 0.20:
+#   sbatch --array=3-87:6%3 --export=ALL,ONLY="pgd_r0.05_it500 pgd_r0.025_it500" swat_sweep.sbatch
+if [[ -n "${ONLY:-}" ]]; then
+    run pgd_r0.05_it500  --attack pgd_mse "${PROTOCOL[@]}" --alpha-relative 0.05  --iterations 500 --random-start --restarts 3
+    run pgd_r0.025_it500 --attack pgd_mse "${PROTOCOL[@]}" --alpha-relative 0.025 --iterations 500 --random-start --restarts 3
+fi
 run corrshift        --attack corrshift --goal evasion --corrshift-eligible --corrshift-rounds 30 --corrshift-step-relative 0.10 --save-series changed
 
 echo "FINISHED $(date -Is)"
