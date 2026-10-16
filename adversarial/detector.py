@@ -17,7 +17,7 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .constants import POINT_MODELS, SEQUENCE_MODELS
+from .constants import ONE_STEP_MODELS, POINT_MODELS, SEQUENCE_MODELS
 from .context import AttackContext, ModelAdapter
 from .errors import instance_detection_scores, model_errors_numpy
 from .io_utils import load_train_scaled, load_vector
@@ -110,6 +110,7 @@ def _sequence_errors_by_lead(
     history: int,
     batch_size: int,
     target_offset: int = 1,
+    one_step: bool = False,
 ) -> np.ndarray:
     """Squared per-feature errors for a sequence model. With target_offset=1 this
     replicates utils.reconstruction_errors_by_idxs (utils.py:61-90) exactly (input
@@ -121,6 +122,8 @@ def _sequence_errors_by_lead(
     for start in range(0, len(leads), batch_size):
         chunk = leads[start : start + batch_size]
         inputs = np.stack([x_full[lead - history : lead] for lead in chunk])
+        if one_step:
+            inputs = inputs[:, 0, :]
         targets = x_full[chunk + target_offset]
         preds = np.asarray(
             adapter.predict_numpy(inputs, batch_size=batch_size)
@@ -186,6 +189,7 @@ def reproduce_validation_theta(
             history,
             args.prediction_batch_size,
             args.target_offset,
+            one_step=args.model_type in ONE_STEP_MODELS,
         )
 
     val_instance = instance_detection_scores(val_errors, args.instance_score)

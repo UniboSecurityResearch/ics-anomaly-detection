@@ -9,7 +9,8 @@ Layout read:  <root>/<run>/<budget>/<attack>/<name>/evasion/
                   checkpoint_metrics.json  iteration_metrics.csv  attack_scores.csv
 with <run> = swatchrono_<model>_s<seed>.
 
-Writes three files in --out and prints the by-model table:
+Writes three files in --out and prints the by-model tables, including how many
+whole attacks are hidden (a run of consecutive target indices = one attack):
   per_run.csv   one row per run, budget and attack
   by_model.csv  mean and standard deviation over the training seeds
   evaded.csv    which targets evade, as index ranges, and which other attack of
@@ -43,7 +44,7 @@ from collections import defaultdict
 from pathlib import Path
 
 RUN_RE = re.compile(r"^(?P<prefix>.+)_(?P<model>[A-Za-z0-9]+)_s(?P<seed>\d+)$")
-BUDGET_ORDER = ["range0.02_protected", "range0.05_protected", "range0.10_protected",
+BUDGET_ORDER = ["range0.01_protected", "range0.02_protected", "range0.05_protected", "range0.10_protected",
                 "range0.20_protected", "range0.10_unprotected", "std0.10_protected"]
 BEST = "BEST"  # strongest attack per run and budget
 
@@ -83,6 +84,39 @@ def final_part(row, final_start, targets, eligible, evaded, after):
                dr_after_final="")
     if after is not None and n:
         row["dr_after_final"] = sum(t >= final_start for t in after) / n
+
+
+def attack_counts(row, targets, eligible, after, final_start):
+    """Whole attacks. Targets are one contiguous block in the middle of each labelled
+    attack, so each run of consecutive target indices is one attack. An attack is
+    detected if at least one of its targets is flagged (the original repository's
+    per-attack rule); it is hidden if it was detected before the attack and none of
+    its targets is flagged after. Needs detected_after_window."""
+    if after is None or not targets:
+        return
+    order = sorted(targets)
+    blocks, start, prev = [], order[0], order[0]
+    for t in order[1:]:
+        if t != prev + 1:
+            blocks.append((start, prev))
+            start = t
+        prev = t
+    blocks.append((start, prev))
+    before_set, after_set = set(eligible), set(after)
+    counts = dict(attacks=0, attacks_before=0, attacks_after=0, attacks_hidden=0,
+                  attacks_final=0, attacks_before_final=0, attacks_hidden_final=0)
+    for a, b in blocks:
+        det_before = any(t in before_set for t in range(a, b + 1))
+        det_after = any(t in after_set for t in range(a, b + 1))
+        final = a >= final_start
+        counts["attacks"] += 1
+        counts["attacks_before"] += det_before
+        counts["attacks_after"] += det_after
+        counts["attacks_hidden"] += det_before and not det_after
+        counts["attacks_final"] += final
+        counts["attacks_before_final"] += final and det_before
+        counts["attacks_hidden_final"] += final and det_before and not det_after
+    row.update(counts)
 
 
 def last_iteration(path):
@@ -132,6 +166,7 @@ def collect(root, final_start):
                     continue
                 total, eligible, evaded, targets, after = read_scores(scores[0])
                 final_part(row, final_start, targets, eligible, evaded, after)
+                attack_counts(row, targets, eligible, after, final_start)
                 row.update(targets=total, eligible=len(eligible),
                            clean_dr=len(eligible) / total if total else "",
                            evasions=len(evaded),
@@ -203,6 +238,10 @@ def aggregate(rows):
             evasions_final_mean=mean_std([r["evasions_final"] for r in items])[0],
             asr_final_mean=fin_m, asr_final_std=fin_s,
             dr_after_final_mean=mean_std([r["dr_after_final"] for r in items])[0],
+            attacks_before_mean=mean_std([r.get("attacks_before", "") for r in items])[0],
+            attacks_hidden_mean=mean_std([r.get("attacks_hidden", "") for r in items])[0],
+            attacks_before_final_mean=mean_std([r.get("attacks_before_final", "") for r in items])[0],
+            attacks_hidden_final_mean=mean_std([r.get("attacks_hidden_final", "") for r in items])[0],
             n_last_it=sum("last_it" in r["flags"].split() for r in items),
             n_dr_up=sum("dr_up" in r["flags"].split() for r in items),
             best_attacks=" ".join(sorted(r["best_attack"] for r in items)) if attack == BEST else ""))
@@ -263,14 +302,17 @@ def main():
                "evasions", "asr", "dr_after", "iteration", "restart", "iterations_run",
                "evasions_minloss", "asr_minloss", "dr_after_minloss", "iteration_minloss",
                "loss_min", "targets_final", "eligible_final", "clean_dr_final",
-               "evasions_final", "asr_final", "dr_after_final", "flags"])
+               "evasions_final", "asr_final", "dr_after_final", "attacks", "attacks_before",
+               "attacks_after", "attacks_hidden", "attacks_final", "attacks_before_final",
+               "attacks_hidden_final", "flags"])
     write_csv(out / "by_model.csv", table,
               ["model", "budget", "attack", "n_seeds", "seeds", "clean_dr_mean",
                "eligible_mean", "evasions_mean", "asr_mean", "asr_std", "asr_minloss_mean",
                "asr_minloss_std", "dr_after_mean", "clean_dr_final_mean",
                "eligible_final_mean", "evasions_final_mean", "asr_final_mean",
-               "asr_final_std", "dr_after_final_mean", "n_last_it", "n_dr_up",
-               "best_attacks"])
+               "asr_final_std", "dr_after_final_mean", "attacks_before_mean",
+               "attacks_hidden_mean", "attacks_before_final_mean",
+               "attacks_hidden_final_mean", "n_last_it", "n_dr_up", "best_attacks"])
     write_csv(out / "evaded.csv", evaded_table(rows, evaded_sets),
               ["run", "budget", "attack", "evaded", "n_ranges", "same_set_as", "ranges"])
 
@@ -305,6 +347,18 @@ def main():
                        num(r["evasions_final_mean"], "%.1f"),
                        fmt(r["asr_final_mean"], r["asr_final_std"], r["n_seeds"]),
                        num(r["dr_after_final_mean"], "%.3f")))
+    print("\nWhole attacks hidden (detected before, no target flagged after; "
+          "mean over seeds; all 32 attacks and the 18 of the final split)")
+    line3 = "%-5s %-22s %-17s %-7s %16s %16s"
+    print(line3 % ("model", "budget", "attack", "seeds", "hidden/32", "hidden/18"))
+    for r in table:
+        if r["attack"] != BEST:
+            continue
+        print(line3 % (r["model"], r["budget"], r["attack"], r["n_seeds"],
+                       num(r["attacks_hidden_mean"], "%.1f") + " of " +
+                       num(r["attacks_before_mean"], "%.1f"),
+                       num(r["attacks_hidden_final_mean"], "%.1f") + " of " +
+                       num(r["attacks_before_final_mean"], "%.1f")))
     incomplete = [r for r in rows if r.get("flags") == "incomplete"]
     mismatch = [r for r in rows if "scores_mismatch" in r.get("flags", "").split()]
     print("\nruns read: %d   incomplete: %d   scores_mismatch: %d"

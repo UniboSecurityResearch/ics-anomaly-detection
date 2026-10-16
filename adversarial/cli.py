@@ -453,7 +453,7 @@ def parse_args() -> argparse.Namespace:
     if args.end is not None and args.start is None:
         parser.error("--end requires --start")
     if args.model_type in SEQUENCE_MODELS and (args.history is None or args.history <= 0):
-        parser.error("--history must be a positive integer for CNN/GRU/LSTM")
+        parser.error("--history must be a positive integer for CNN/DNN/GRU/LSTM (1 for LIN)")
     if args.epsilon < 0 or args.alpha < 0:
         parser.error("--epsilon and --alpha must be non-negative")
     if args.iterations <= 0:

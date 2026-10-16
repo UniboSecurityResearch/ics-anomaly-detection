@@ -38,7 +38,7 @@ def segments(mask):
     return list(zip(np.flatnonzero(diff == 1), np.flatnonzero(diff == -1)))
 
 
-def analyse(model_dir, dataset, out_dir, batch_size, gru_rule="same"):
+def analyse(model_dir, dataset, out_dir, batch_size, gru_rule="same", final_start=None):
     jsons = sorted(glob.glob(os.path.join(model_dir, "*.json")))
     if not jsons:
         print(f"SKIP {model_dir}: no .json")
@@ -78,12 +78,35 @@ def analyse(model_dir, dataset, out_dir, batch_size, gru_rule="same"):
     benign_fpr = float(flagged[~attack][first:].mean()) if np.any(~attack) else float("nan")
     point_recall = float(flagged[attack].mean())
 
+    final = None
+    if final_start is not None:
+        # Final split = the part of the test file not used to choose theta and the
+        # window (training reports its metrics there). No attack crosses the border
+        # on SWaT; an attack counts as final if it starts at or after final_start.
+        for r in rows:
+            r["in_final"] = r["start"] >= final_start
+        fin_rows = [r for r in rows if r["in_final"]]
+        in_final = np.zeros(len(x_test), dtype=bool)
+        in_final[final_start:] = True
+        valid = np.zeros(len(x_test), dtype=bool)
+        valid[first:last] = True
+        att_f = attack & in_final & valid
+        ben_f = ~attack & in_final & valid
+        final = dict(
+            attacks=len(fin_rows),
+            detected=sum(r["detected"] for r in fin_rows),
+            detected_10pct=sum(r["flagged_fraction"] >= 0.10 for r in fin_rows),
+            recall=float(flagged[att_f].mean()) if att_f.any() else float("nan"),
+            fpr=float(flagged[ben_f].mean()) if ben_f.any() else float("nan"),
+            fa_runs=sum(1 for s, e in segments(flagged & ~attack & in_final)))
+
     os.makedirs(out_dir, exist_ok=True)
     tag = os.path.basename(os.path.normpath(model_dir))
     with open(os.path.join(out_dir, f"{tag}.csv"), "w") as fd:
-        fd.write("attack,start,end,length,flagged_fraction,detected,delay\n")
+        fd.write("attack,start,end,length,flagged_fraction,detected,delay,in_final\n")
         for r in rows:
-            fd.write("{attack},{start},{end},{length},{flagged_fraction:.4f},{detected},{delay}\n".format(**r))
+            fd.write("{attack},{start},{end},{length},{flagged_fraction:.4f},{detected},{delay},".format(**r)
+                     + str(r.get("in_final", "")) + "\n")
 
     detected = sum(r["detected"] for r in rows)
     print(f"\n=== {tag} ({name}) theta={theta:.6g} window={window}")
@@ -93,7 +116,12 @@ def analyse(model_dir, dataset, out_dir, batch_size, gru_rule="same"):
     for r in rows:
         print(f"{r['attack']:>6}  {r['length']:>6}  {r['flagged_fraction']:>7.2f}  "
               f"{r['delay'] if r['detected'] else 'missed':>5}")
-    return tag, detected, len(rows), point_recall, fa_runs
+    if final is not None:
+        print("final split (attacks starting at or after row {}): detected {}/{} "
+              "(>=10% flagged: {}), recall={:.3f}, FPR={:.4f}, false-alarm runs={}".format(
+                  final_start, final["detected"], final["attacks"], final["detected_10pct"],
+                  final["recall"], final["fpr"], final["fa_runs"]))
+    return tag, detected, len(rows), point_recall, fa_runs, final
 
 
 def main():
@@ -104,14 +132,27 @@ def main():
     ap.add_argument("--batch-size", type=int, default=4096)
     ap.add_argument("--gru-window-rule", choices=["same", "legacy"], default="same",
                     help="GRU window rule; see main_adversarial.py --help")
+    ap.add_argument("--final-start", type=int, default=None,
+                    help="first test row of the final split (SWaT: 134975); adds the "
+                         "per-attack counts on the final split only")
     args = ap.parse_args()
     summary = [s for s in (analyse(d, args.dataset, args.out_dir, args.batch_size,
-                                   args.gru_window_rule)
+                                   args.gru_window_rule, args.final_start)
                            for d in args.model_dirs) if s]
-    print("\n=== SUMMARY")
+    print("\n=== SUMMARY (whole test file)")
     print("model                     attacks_detected  timestep_recall  false_alarm_runs")
-    for tag, det, n, rec, fa in summary:
+    for tag, det, n, rec, fa, _ in summary:
         print(f"{tag:<25} {det:>3}/{n:<12} {rec:>15.3f} {fa:>17}")
+    if args.final_start is not None:
+        print("\n=== SUMMARY (final split only: attacks not used to choose theta and window)")
+        print("model                     detected  >=10%flagged  recall    FPR     false_alarm_runs")
+        with open(os.path.join(args.out_dir, "summary_final.csv"), "w") as fd:
+            fd.write("model,attacks,detected,detected_10pct,recall,fpr,fa_runs\n")
+            for tag, _, _, _, _, f in summary:
+                print(f"{tag:<25} {f['detected']:>3}/{f['attacks']:<5} {f['detected_10pct']:>5}/{f['attacks']:<7}"
+                      f" {f['recall']:.3f}  {f['fpr']:.4f}  {f['fa_runs']:>8}")
+                fd.write(f"{tag},{f['attacks']},{f['detected']},{f['detected_10pct']},"
+                         f"{f['recall']:.4f},{f['fpr']:.5f},{f['fa_runs']}\n")
 
 
 if __name__ == "__main__":

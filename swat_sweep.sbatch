@@ -34,12 +34,19 @@ set -euo pipefail
 REPO=/scratch.hpc/dhyana.schirra/tesi/ics-anomaly-detection
 IMAGE="$REPO/sip.sif"
 
+# SWEEP_MODELS (optional) replaces the model list, e.g. SWEEP_MODELS=lin gives
+# 18 tasks (0-17) for the linear model with the same budget mapping. Default: the
+# original 5 models, so task ids 0-89 keep their meaning.
+SWEEP_MODELS="${SWEEP_MODELS:-ae cnn dnn lstm gru}"
 RUNS=()
 for SEED in 7 21 42; do
-    for M in ae cnn dnn lstm gru; do
+    for M in $SWEEP_MODELS; do
         RUNS+=("swatchrono_${M}_s${SEED}")
     done
 done
+if (( SLURM_ARRAY_TASK_ID / 6 >= ${#RUNS[@]} )); then
+    echo "ERROR: task ${SLURM_ARRAY_TASK_ID} has no model (models: $SWEEP_MODELS)"; exit 1
+fi
 RUN="${RUNS[$((SLURM_ARRAY_TASK_ID / 6))]}"
 BUDGET_ID=$((SLURM_ARRAY_TASK_ID % 6))
 case "$BUDGET_ID" in
@@ -50,6 +57,13 @@ case "$BUDGET_ID" in
     4) BUDGET_TAG=std0.10_protected;    BUDGET=(--epsilon 0.10 --protect-actuators) ;;
     5) BUDGET_TAG=range0.10_unprotected; BUDGET=(--epsilon-range-fraction 0.10) ;;
 esac
+# RANGE_FRACTION (optional) replaces the budget with that range fraction, actuators
+# protected; used with ONLY for extra budgets, e.g. RANGE_FRACTION=0.01 (the
+# CorrShift coefficient of FEVA-ICS). Only task id / 6 (the model) matters then.
+if [[ -n "${RANGE_FRACTION:-}" ]]; then
+    BUDGET_TAG="range${RANGE_FRACTION}_protected"
+    BUDGET=(--epsilon-range-fraction "$RANGE_FRACTION" --protect-actuators)
+fi
 
 MODEL_DIR="$REPO/models/$RUN"
 OUT="$REPO/outputs/sweep_v2/$RUN/$BUDGET_TAG"
@@ -69,7 +83,8 @@ if [[ "$MODEL" != "AE" ]]; then HISTORY_ARGS=(--history "$HISTORY" --target-offs
 mkdir -p "$OUT"
 # With ONLY set (a rerun of some attacks) keep the budget folder's original
 # provenance; each attack folder gets its own git_commit.txt below.
-if [[ -z "${ONLY:-}" ]]; then
+if [[ -z "${ONLY:-}" || ! -e "$OUT/model_params.json" ]]; then
+    # (with ONLY, only a budget folder that does not exist yet gets these files)
     cp "$JSON" "$OUT/model_params.json"
     git -C "$REPO" rev-parse HEAD > "$OUT/git_commit.txt"
     git -C "$REPO" diff > "$OUT/code_changes.patch"

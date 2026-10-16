@@ -13,7 +13,7 @@ from typing import Any, List, Optional
 import numpy as np
 import tensorflow as tf
 
-from .constants import POINT_MODELS
+from .constants import ONE_STEP_MODELS, POINT_MODELS
 from .context import ModelAdapter
 
 
@@ -61,6 +61,10 @@ def model_errors_tf(
         assert history is not None
         hist_idx = history_index_matrix_tf(target_indices, history, target_offset)
         histories = tf.gather(x_series, hist_idx)
+        if model_type in ONE_STEP_MODELS:
+            if history != 1:
+                raise ValueError(f"{model_type} is a one-step model: --history must be 1")
+            histories = histories[:, 0, :]
         predicted = model(histories, training=False)
     predicted = normalize_model_output_tf(predicted)
     if observed.shape.rank != 2:
@@ -92,6 +96,10 @@ def model_errors_numpy(
             assert history is not None
             hist_idx = history_index_matrix_np(idx, history, target_offset)
             model_input = x_series[hist_idx]
+            if model_type in ONE_STEP_MODELS:
+                if history != 1:
+                    raise ValueError(f"{model_type} is a one-step model: --history must be 1")
+                model_input = model_input[:, 0, :]
         predicted = adapter.predict_numpy(model_input, batch_size=batch_size)
         predicted = np.asarray(predicted, dtype=np.float32).reshape(len(idx), -1)
         observed = np.asarray(observed, dtype=np.float32).reshape(len(idx), -1)
