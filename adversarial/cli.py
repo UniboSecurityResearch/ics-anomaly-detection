@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import argparse
 
-from .attacks import ALL_ATTACKS
+from .attacks import ATTACK_CHOICES
 from .constants import POINT_MODELS, SEQUENCE_MODELS
 
 
@@ -104,7 +104,7 @@ def parse_args() -> argparse.Namespace:
     )
     attack.add_argument(
         "--attack",
-        choices=ALL_ATTACKS + ["all"],
+        choices=ATTACK_CHOICES + ["all"],
         default="pgd_mse",
     )
     attack.add_argument(
@@ -393,6 +393,22 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    feva = parser.add_argument_group("CorrShift as in FEVA-ICS (--attack corrshift_feva)")
+    feva.add_argument(
+        "--feva-batch",
+        type=int,
+        default=60,
+        help="Consecutive rows per batch; each batch gets its own constant shift "
+             "(FEVA-ICS uses 60 on SWaT).",
+    )
+    feva.add_argument(
+        "--feva-corr-source",
+        choices=["attacked", "train"],
+        default="attacked",
+        help="Correlations from the rows being attacked (as in FEVA-ICS) or from "
+             "benign training data.",
+    )
+
     output = parser.add_argument_group("saved outputs")
     output.add_argument(
         "--save-series",
@@ -421,8 +437,9 @@ def parse_args() -> argparse.Namespace:
     if args.eligible_protocol:
         if args.goal != "evasion":
             parser.error("--eligible-protocol requires --goal evasion")
-        if args.attack in ("corrshift", "all"):
-            parser.error("--eligible-protocol needs a single white-box attack (not corrshift/all)")
+        if args.attack in ("corrshift", "corrshift_feva", "all"):
+            parser.error("--eligible-protocol needs a single white-box attack "
+                         "(not corrshift/corrshift_feva/all; corrshift_feva always uses E)")
         if args.instance_threshold is None and args.instance_threshold_percentile is None:
             parser.error("Eligible protocol requires an instance threshold or percentile")
     if args.restarts < 1:

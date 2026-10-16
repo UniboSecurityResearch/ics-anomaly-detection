@@ -26,6 +26,9 @@ theta and the window, and it holds 14 of the 32 attacks. The *_final columns
 and the second printed table count only the targets after that row, i.e. the
 18 attacks the detector was not tuned on. They refer to the same checkpoint
 as "asr" (most evasions over all targets).
+Without checkpoint_metrics.json (CorrShift) "DR after" is the share of all targets
+still detected after the attack (detected_after_window), so new alarms on missed
+targets count; only files without that column fall back to (|E| - evasions) / targets.
 Flags: last_it = the best_asr point is the last iteration (attack not
 converged, the value is a lower bound); dr_up = detection after the attack is
 higher than on clean data (the attack made things worse); incomplete = no
@@ -133,7 +136,9 @@ def collect(root, final_start):
                            clean_dr=len(eligible) / total if total else "",
                            evasions=len(evaded),
                            asr=len(evaded) / len(eligible) if eligible else "",
-                           dr_after=(len(eligible) - len(evaded)) / total if total else "")
+                           dr_after=((len(after) if after is not None
+                                      else len(eligible) - len(evaded)) / total
+                                     if total else ""))
                 flags = []
                 if checkpoint:
                     best = json.load(checkpoint[0].open())

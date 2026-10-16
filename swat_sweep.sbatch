@@ -124,6 +124,10 @@ run topk_r0.10_it200 --attack pgd_topk "${PROTOCOL[@]}" --alpha-relative 0.10 --
 if [[ -n "${ONLY:-}" ]]; then
     run pgd_r0.05_it500  --attack pgd_mse "${PROTOCOL[@]}" --alpha-relative 0.05  --iterations 500 --random-start --restarts 3
     run pgd_r0.025_it500 --attack pgd_mse "${PROTOCOL[@]}" --alpha-relative 0.025 --iterations 500 --random-start --restarts 3
+    # CorrShift as in FEVA-ICS (Algorithm 1): one constant shift per batch of 60 rows,
+    # candidate chosen by the number of targets still detected. On request only:
+    #   sbatch --array=0-89%3 --export=ALL,ONLY=corrshift_feva swat_sweep.sbatch
+    run corrshift_feva   --attack corrshift_feva --goal evasion --feva-batch 60 --feva-corr-source attacked --save-series changed
 fi
 run corrshift        --attack corrshift --goal evasion --corrshift-eligible --corrshift-rounds 30 --corrshift-step-relative 0.10 --save-series changed
 

@@ -14,7 +14,7 @@ import numpy as np
 import tensorflow as tf
 
 from data_loader import load_test_data
-from .attacks import ATTACKS
+from .attacks import ALL_ATTACKS, ATTACKS
 from .constants import POINT_MODELS
 from .context import AttackContext
 from .detector import (
@@ -73,7 +73,7 @@ def build_context(args: argparse.Namespace) -> AttackContext:
     if not np.any(modification_mask):
         raise ValueError("Modification mask is empty; no cell can be attacked.")
 
-    requested_attacks = list(ATTACKS) if args.attack == "all" else [args.attack]
+    requested_attacks = list(ALL_ATTACKS) if args.attack == "all" else [args.attack]
     need_train = (
         args.clip_train_range
         or args.threshold_percentile is not None

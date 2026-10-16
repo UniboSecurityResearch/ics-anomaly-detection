@@ -36,7 +36,7 @@ except ImportError as exc:  # pragma: no cover - environment-dependent
 import numpy as np
 import pandas as pd
 
-from adversarial.attacks import ATTACKS
+from adversarial.attacks import ALL_ATTACKS, ATTACKS
 from adversarial.build import build_context
 from adversarial.cli import parse_args
 from adversarial.evaluation import evaluate_series, run_sanity_check, save_run
@@ -44,7 +44,7 @@ from adversarial.evaluation import evaluate_series, run_sanity_check, save_run
 
 def select_attacks(args, thresholds) -> List[str]:
     """Threshold-gate the requested attacks, preserving the monolith's messaging."""
-    requested = list(ATTACKS) if args.attack == "all" else [args.attack]
+    requested = list(ALL_ATTACKS) if args.attack == "all" else [args.attack]
     result: List[str] = []
     for name in requested:
         if ATTACKS[name].requires_thresholds and thresholds is None:

@@ -16,14 +16,18 @@ from .pgd_margin import PgdMargin
 from .pgd_cw import PgdCw
 from .pgd_kl import PgdKl
 from .corrshift import CorrShift
+from .corrshift_feva import CorrShiftFeva
 
 # Insertion order defines the canonical order used by --attack all.
-_REGISTERED = [FgsmMse, PgdMse, PgdTopk, PgdHinge, PgdMargin, PgdCw, PgdKl, CorrShift]
+_REGISTERED = [FgsmMse, PgdMse, PgdTopk, PgdHinge, PgdMargin, PgdCw, PgdKl, CorrShift,
+               CorrShiftFeva]
 
 ATTACKS: Dict[str, Type[Attack]] = {cls.name: cls for cls in _REGISTERED}
-ALL_ATTACKS: List[str] = list(ATTACKS)
+# --attack all keeps its original set: attacks marked in_all = False run only by name.
+ALL_ATTACKS: List[str] = [name for name, cls in ATTACKS.items() if getattr(cls, "in_all", True)]
+ATTACK_CHOICES: List[str] = list(ATTACKS)
 WHITEBOX_ATTACKS: Set[str] = {
     name for name, cls in ATTACKS.items() if cls.requires_gradients
 }
 
-__all__ = ["ATTACKS", "ALL_ATTACKS", "WHITEBOX_ATTACKS"]
+__all__ = ["ATTACKS", "ALL_ATTACKS", "ATTACK_CHOICES", "WHITEBOX_ATTACKS"]
