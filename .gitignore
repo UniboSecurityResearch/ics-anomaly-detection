@@ -168,3 +168,7 @@ slurm.*.err
 
 # Generated SWaT preprocessing artifact
 models/SWAT_scaler.pkl
+
+# Diffusion purification: trained noise predictors and local scratch copies
+models/diffusion_*/
+scratch_models/
