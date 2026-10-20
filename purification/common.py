@@ -76,3 +76,13 @@ def load_purifier(diffusion_dir: Optional[str], t_star: int, n_steps: int, sampl
         raise SystemExit("--diffusion is required for t* > 0")
     model, config = load_denoiser(diffusion_dir)
     return Purifier(model, t_star, n_steps, sampler), config
+
+
+def data_digest(dataset: str) -> dict:
+    """SHA-256 of the raw (unscaled) feature matrices and labels as the repository
+    loads them: identical digests mean identical data, whatever the CSV line endings."""
+    import hashlib
+    raw, _ = load_train_data(dataset, no_transform=True)
+    xt, yt, _ = load_test_data(dataset, scaler=load_scaler(dataset), no_transform=True)
+    h = lambda a: hashlib.sha256(np.ascontiguousarray(np.asarray(a, dtype=np.float64)).tobytes()).hexdigest()
+    return dict(train=h(raw), test=h(xt), labels=h(np.asarray(yt).astype(float)))

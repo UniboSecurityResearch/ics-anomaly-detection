@@ -81,6 +81,27 @@ the test file with the same metric and FPR cap), and is reported on the final pa
   (validation loss on t <= 300 not below half the structure-free predictor's) or fails
   at the detectors' window lengths.
 
+## Selection rule for phase 2 (fixed before phase 1 runs)
+
+All on the **tuning** split, AE seed 7:
+
+1. *utility*: keep the `t*` whose defended tuning F1 is at least the undefended
+   tuning F1 minus 0.05 (absolute);
+2. *robustness*: among them, the `t*` with the highest worst-case detection rate on E
+   under evasion at budget 0.05 (worst case over the full-gradient, surrogate, BPDA
+   and blind attackers that were run at that `t*`, otherwise over the full-gradient
+   one); ties (within 1 percentage point) go to the smaller `t*`; false-alarm
+   robustness is the tie-break after that;
+3. *attack strength*: EOT = the smallest value of {1, 5, 10, 20, 40} whose detection
+   rate on E is within 1 percentage point of EOT 40; iterations = 200 unless the
+   500-iteration run is more than 1 point stronger (then 500);
+4. *denoising steps / sampler*: K = 10 DDPM unless K = 5, K = 20 or DDIM is more
+   robust by more than 1 point at the same `t*` without violating 1.
+
+If no `t*` > 0 satisfies 1, the result is that the defense costs too much clean
+detection on SWaT for this detector, and phase 2 reports that rather than a tuned
+defense.
+
 ## Two phases
 
 1. `purification_phase1.sh` (AE seed 7, **tuning** split): diffusion training,

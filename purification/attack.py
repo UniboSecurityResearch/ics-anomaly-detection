@@ -71,6 +71,9 @@ def add_attack_args(ap):
     ap.add_argument("--eval-draws", type=int, default=10)
     ap.add_argument("--trace-every", type=int, default=10)
     ap.add_argument("--attack-batch", type=int, default=256)
+    ap.add_argument("--max-minutes", type=float, default=600.0,
+                    help="stop the PGD loop after this wall time and evaluate the point reached "
+                         "(the job limit is 12 h); recorded as stopped_early")
 
 
 class DefendedDetector:
@@ -243,6 +246,7 @@ def run_attack(args) -> int:
     trace_path = out / "iterations.csv"
     fields = ["restart", "iteration", "loss", "trace_flagged", "trace_dr_E", "seconds"]
     best = dict(loss=np.inf)
+    stopped_early = None
     with open(trace_path, "w", newline="") as fd:
         writer = csv.DictWriter(fd, fieldnames=fields)
         writer.writeheader()
@@ -250,6 +254,8 @@ def run_attack(args) -> int:
             rng = tf.random.Generator.from_seed(args.seed * 7919 + restart)
             delta = (rng.uniform(tf.shape(x0c), -1.0, 1.0) * eps_tf * feat_mask)
             x0 = tf.constant(x0c)
+            if stopped_early is not None:
+                break
             for it in range(args.iterations + 1):
                 xc = x0 + delta
                 loss, grad = eot_loss_grad(xc, restart, it)
@@ -267,8 +273,12 @@ def run_attack(args) -> int:
                 fd.flush()
                 if loss < best["loss"]:
                     best = dict(loss=loss, restart=restart, iteration=it, xc=xc.numpy())
-                if it == args.iterations:
+                out_of_time = (time.time() - started) / 60.0 > args.max_minutes
+                if it == args.iterations or out_of_time:
                     final_point = dict(loss=loss, restart=restart, iteration=it, xc=xc.numpy())
+                    if out_of_time and it < args.iterations:
+                        stopped_early = dict(restart=restart, iteration=it)
+                        print(f"WARNING: wall-time limit reached at restart {restart} iteration {it}", flush=True)
                     break
                 g = grad * feat_mask
                 delta = tf.clip_by_value(delta - alpha * tf.sign(g), -eps_tf, eps_tf) * feat_mask
@@ -312,6 +322,7 @@ def run_attack(args) -> int:
                       epsilon_range_fraction=args.epsilon_range_fraction,
                       protect_actuators=bool(args.protect_actuators), seed=args.seed),
         n_targets=int(len(targets)), n_eligible=int(eligible.sum()), eval_draws=draws,
+        stopped_early=stopped_early,
         clean=dict(per_draw=clean_draws, flagged_mean=float(clean.mean()),
                    flagged_std=float(clean.mean(axis=1).std())),
         adversarial=results, reported_point=pick, reported=results[pick],

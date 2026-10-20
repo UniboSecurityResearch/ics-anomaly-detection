@@ -72,6 +72,8 @@ def parse_args():
     ap.add_argument("--val-windows", type=int, default=4096)
     ap.add_argument("--val-tmax", type=int, default=300)
     ap.add_argument("--check-lengths", type=int, nargs="*", default=[64, 101])
+    ap.add_argument("--expect-data", nargs=3, metavar=("TRAIN", "TEST", "LABELS"), default=None,
+                    help="SHA-256 digests (purification.common.data_digest) the data must have; exit 5 otherwise")
     ap.add_argument("--gate-ratio", type=float, default=0.5)
     ap.add_argument("--gate-length", type=float, default=1.25)
     ap.add_argument("--seed", type=int, default=0)
@@ -135,6 +137,15 @@ def main():
     tf.random.set_seed(args.seed)
     np.random.seed(args.seed)
     print("TensorFlow", tf.__version__, "GPUs:", tf.config.list_physical_devices("GPU"), flush=True)
+    if args.expect_data:
+        from purification.common import data_digest
+        digest = data_digest(args.dataset)
+        expected = dict(zip(("train", "test", "labels"), args.expect_data))
+        for k in expected:
+            print(f"data digest {k}: {digest[k]} ({'OK' if digest[k] == expected[k] else 'MISMATCH'})", flush=True)
+        if digest != expected:
+            print("ERROR: the data differ from the expected ones", flush=True)
+            sys.exit(5)
 
     scaler = load_scaler(args.dataset)
     _, sensor_cols = load_train_data(args.dataset, no_transform=True)  # writes nothing

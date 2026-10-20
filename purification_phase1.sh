@@ -12,19 +12,21 @@
 #   1. diffusion   train the noise predictor (gate: exit 4 if it has not learnt
 #                  structure or fails at the detectors' window lengths)
 #   2. calibrate   AE s7: t* = 0 (must reproduce the stored detector, else exit 3),
-#                  10, 20, 50, 100, 150, 200, 300 with K = 10 DDPM steps; K = 5 / 20
-#                  and DDIM K = 10 at t* = 50, 100, 200
-#   3. attacks     budget 0.10 x training range, actuators protected, PGD 200 it.,
-#                  step 0.10 eps, random start, up to 2048 targets, 10 eval draws:
-#                  a) full-gradient PGD+EOT(20), evasion and false alarm, every t*
-#                     (t* = 0 is the undefended reference)
-#                  b) BPDA and defense-blind attacker, t* = 50, 100, 200
-#                  c) surrogate process with 2 / 5 steps, t* = 100, 200 (evasion)
-#                  d) EOT = 1, 5, 10, 40 at t* = 100 (evasion): EOT saturation
-#                  e) 500 iterations at t* = 100 (evasion): iteration saturation
-#                  f) huge budget (whole range, actuators free) at t* = 0 and 100:
+#                  5, 10, 20, 30, 50, 100, 150, 200, 300 with K = 10 DDPM steps;
+#                  K = 5 / 20 and DDIM K = 10 at t* = 20, 50, 100
+#   3. attacks     PGD 200 it., step 0.10 eps, random start, up to 2048 targets,
+#                  10 eval draws, actuators protected:
+#                  a) full-gradient PGD+EOT(20), evasion and false alarm, budgets
+#                     0.02 / 0.05 / 0.10 x training range, t* = 0 (undefended
+#                     reference), 10, 20, 50, 100, 200
+#                  checks b-g at budget 0.05:
+#                  b) BPDA and defense-blind attacker, t* = 20, 50, 100
+#                  c) surrogate process with 2 / 5 steps, t* = 50, 100 (evasion)
+#                  d) EOT = 1, 5, 10, 40 at t* = 50 (evasion): EOT saturation
+#                  e) 500 iterations at t* = 50 (evasion): iteration saturation
+#                  f) huge budget (whole range, actuators free) at t* = 0 and 50:
 #                     an attack that cannot win here would signal gradient masking
-#                  g) defense with K = 5 / 20 and with DDIM at t* = 100 (evasion)
+#                  g) defense with K = 5 / 20 and with DDIM at t* = 50 (evasion)
 # Nothing is overwritten: every task writes its own folder under
 # outputs/purification/phase1 and is skipped if its DONE marker exists.
 set -euo pipefail
@@ -66,15 +68,19 @@ echo "commit $(git rev-parse --short HEAD), $(date -Is)" > "$P1/commit.txt"
 
 # --- task files ----------------------------------------------------------------
 TD="$P1/tasks"; mkdir -p "$TD"
-echo "$DIFF main_train_diffusion.py SWAT-CLEAN --out $DIFF --window 128 --steps 100000 --batch 128" > "$TD/diffusion.txt"
+# digests of the SWAT-CLEAN matrices as processed by data/SWAT/process_SWaT.py from
+# the iTrust files whose hashes hash_SWaT.py accepts (computed in the development
+# copy): the job stops (exit 5) if the cluster data differ
+DIGESTS="8e2a2c4d5bec839b70ab49c06fe4e86c859cd9d72cfb2e07c5465322925da343 a46e7134e5b3895d84205a72d0380f12d4c5cb7bca97651716998cf7744ded09 456181b4a539a65f3d9ad8f1be3b15dd348acabf6b69f186c1385a6a36e3cc3c"
+echo "$DIFF main_train_diffusion.py SWAT-CLEAN --out $DIFF --window 128 --steps 100000 --batch 128 --expect-data $DIGESTS" > "$TD/diffusion.txt"
 
 CAL=$P1/calib
 COMMON="--dataset SWAT-CLEAN --model-dir $MODEL --diffusion $DIFF --context 64"
 {
-    echo "$CAL/k10_ddpm main_purification.py calibrate $COMMON --steps 10 --sampler ddpm --t-star 0 10 20 50 100 150 200 300 --draws 5 --out $CAL/k10_ddpm"
-    echo "$CAL/k05_ddpm main_purification.py calibrate $COMMON --steps 5 --sampler ddpm --t-star 50 100 200 --draws 5 --out $CAL/k05_ddpm"
-    echo "$CAL/k20_ddpm main_purification.py calibrate $COMMON --steps 20 --sampler ddpm --t-star 50 100 200 --draws 5 --out $CAL/k20_ddpm"
-    echo "$CAL/k10_ddim main_purification.py calibrate $COMMON --steps 10 --sampler ddim --t-star 50 100 200 --draws 5 --out $CAL/k10_ddim"
+    echo "$CAL/k10_ddpm main_purification.py calibrate $COMMON --steps 10 --sampler ddpm --t-star 0 5 10 20 30 50 100 150 200 300 --draws 5 --out $CAL/k10_ddpm"
+    echo "$CAL/k05_ddpm main_purification.py calibrate $COMMON --steps 5 --sampler ddpm --t-star 20 50 100 --draws 5 --out $CAL/k05_ddpm"
+    echo "$CAL/k20_ddpm main_purification.py calibrate $COMMON --steps 20 --sampler ddpm --t-star 20 50 100 --draws 5 --out $CAL/k20_ddpm"
+    echo "$CAL/k10_ddim main_purification.py calibrate $COMMON --steps 10 --sampler ddim --t-star 20 50 100 --draws 5 --out $CAL/k10_ddim"
 } > "$TD/calibrate.txt"
 
 defense() {  # $1 = calib folder, $2 = t*, $3 = K, $4 = sampler -> defense json path
@@ -83,49 +89,55 @@ defense() {  # $1 = calib folder, $2 = t*, $3 = K, $4 = sampler -> defense json 
 }
 ATT=$P1/attacks
 BASE="--dataset SWAT-CLEAN --model-dir $MODEL --split tune --max-targets 2048 --alpha-relative 0.10 --eval-draws 10 --trace-every 10 --seed 42"
-BUDGET="--epsilon-range-fraction 0.10 --protect-actuators"
 {
-    # a) full gradient, every t*
-    for T in 0 10 20 50 100 150 200 300; do
-        for G in evasion false_alarm; do
-            O=$ATT/full_eot20_it200/t$T/$G
-            echo "$O main_purification.py attack $BASE $BUDGET --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal $G --gradient full --eot 20 --iterations 200 --out $O"
-        done
-    done
-    # b) BPDA and defense-blind
-    for T in 50 100 200; do
-        for GR in bpda blind; do
+    # a) full gradient, budgets 0.02 / 0.05 / 0.10 of the training range (actuators
+    #    protected), every t* used for attacks (t* = 0 is the undefended reference)
+    for B in 0.02 0.05 0.10; do
+        for T in 0 10 20 50 100 200; do
             for G in evasion false_alarm; do
-                O=$ATT/${GR}_it200/t$T/$G
-                echo "$O main_purification.py attack $BASE $BUDGET --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal $G --gradient $GR --eot 20 --iterations 200 --out $O"
+                O=$ATT/range$B/full_eot20_it200/t$T/$G
+                echo "$O main_purification.py attack $BASE --epsilon-range-fraction $B --protect-actuators --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal $G --gradient full --eot 20 --iterations 200 --out $O"
             done
         done
     done
-    # c) surrogate process
-    for T in 100 200; do
-        for KA in 2 5; do
-            O=$ATT/surrogate_k${KA}_eot20_it200/t$T/evasion
-            echo "$O main_purification.py attack $BASE $BUDGET --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal evasion --gradient surrogate --attack-steps $KA --eot 20 --iterations 200 --out $O"
+    # checks at budget 0.05
+    B=0.05
+    CHK="$BASE --epsilon-range-fraction $B --protect-actuators"
+    # b) BPDA and defense-blind attacker
+    for T in 20 50 100; do
+        for GR in bpda blind; do
+            for G in evasion false_alarm; do
+                O=$ATT/range$B/${GR}_it200/t$T/$G
+                echo "$O main_purification.py attack $CHK --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal $G --gradient $GR --eot 20 --iterations 200 --out $O"
+            done
         done
     done
-    # d) EOT saturation
+    # c) surrogate process (attacker uses fewer denoising steps)
+    for T in 50 100; do
+        for KA in 2 5; do
+            O=$ATT/range$B/surrogate_k${KA}_eot20_it200/t$T/evasion
+            echo "$O main_purification.py attack $CHK --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal evasion --gradient surrogate --attack-steps $KA --eot 20 --iterations 200 --out $O"
+        done
+    done
+    # d) EOT saturation (EOT = 20 is in a)
     for E in 1 5 10 40; do
-        O=$ATT/full_eot${E}_it200/t100/evasion
-        echo "$O main_purification.py attack $BASE $BUDGET --defense $(defense $CAL/k10_ddpm 100 10 ddpm) --goal evasion --gradient full --eot $E --iterations 200 --out $O"
+        O=$ATT/range$B/full_eot${E}_it200/t50/evasion
+        echo "$O main_purification.py attack $CHK --defense $(defense $CAL/k10_ddpm 50 10 ddpm) --goal evasion --gradient full --eot $E --iterations 200 --out $O"
     done
     # e) iteration saturation
-    O=$ATT/full_eot20_it500/t100/evasion
-    echo "$O main_purification.py attack $BASE $BUDGET --defense $(defense $CAL/k10_ddpm 100 10 ddpm) --goal evasion --gradient full --eot 20 --iterations 500 --out $O"
-    # f) huge budget, actuators free
-    for T in 0 100; do
-        O=$ATT/full_eot20_it200_range1.0_free/t$T/evasion
+    O=$ATT/range$B/full_eot20_it500/t50/evasion
+    echo "$O main_purification.py attack $CHK --defense $(defense $CAL/k10_ddpm 50 10 ddpm) --goal evasion --gradient full --eot 20 --iterations 500 --out $O"
+    # f) huge budget, actuators free: an attack that cannot win here would signal
+    #    gradient masking
+    for T in 0 50; do
+        O=$ATT/range1.0_free/full_eot20_it200/t$T/evasion
         echo "$O main_purification.py attack $BASE --epsilon-range-fraction 1.0 --defense $(defense $CAL/k10_ddpm $T 10 ddpm) --goal evasion --gradient full --eot 20 --iterations 200 --out $O"
     done
-    # g) other defense configurations at t* = 100
+    # g) other defense configurations at t* = 50
     for CFG in "k05_ddpm 5 ddpm" "k20_ddpm 20 ddpm" "k10_ddim 10 ddim"; do
         read -r C K S <<< "$CFG"
-        O=$ATT/full_eot20_it200_defense_$C/t100/evasion
-        echo "$O main_purification.py attack $BASE $BUDGET --defense $(defense $CAL/$C 100 $K $S) --goal evasion --gradient full --eot 20 --iterations 200 --out $O"
+        O=$ATT/range$B/full_eot20_it200_defense_$C/t50/evasion
+        echo "$O main_purification.py attack $CHK --defense $(defense $CAL/$C 50 $K $S) --goal evasion --gradient full --eot 20 --iterations 200 --out $O"
     done
 } > "$TD/attacks.txt"
 

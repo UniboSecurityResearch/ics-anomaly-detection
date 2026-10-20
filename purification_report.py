@@ -39,7 +39,8 @@ def attack_rows(root):
             adv_flagged=r["flagged_mean"], adv_flagged_std=r["flagged_std"],
             dr_E=r.get("dr_E_mean", ""), dr_E_std=r.get("dr_E_std", ""), asr=r.get("asr_mean", ""),
             point=s["reported_point"], linf=r["linf_scaled"], changed_cells=r["changed_cells"],
-            minutes=round(s["runtime_seconds"] / 60, 1)))
+            minutes=round(s["runtime_seconds"] / 60, 1),
+            stopped_early=bool(s.get("stopped_early"))))
     return rows
 
 
@@ -94,7 +95,7 @@ def main():
             print(f"  {r['model'][:22]:<22} {r['goal']:<11} eps={r['eps_range']:<5} t*={r['t_star']:>4} "
                   f"K={r['steps']:>3} {r['attacker']:<9}(K={r['attacker_steps']},EOT={r['eot']}) "
                   f"flagged {fmt(r['clean_flagged'])} -> {fmt(r['adv_flagged'])}+-{fmt(r['adv_flagged_std'])}"
-                  f"{extra} [{r['split']}, {r['minutes']} min]")
+                  f"{extra} [{r['split']}, {r['minutes']} min{', STOPPED EARLY' if r['stopped_early'] else ''}]")
     return 0
 
 
