@@ -212,7 +212,7 @@ def run_attack(args) -> int:
     weight = np.concatenate([np.full(n_loss, 1.0 / n_loss), np.zeros(n_pad)]).astype(np.float32)
     batches = [(tf.constant(widx_p[i:i + B]), tf.constant(weight[i:i + B])) for i in range(0, len(widx_p), B)]
 
-    @tf.function(reduce_retracing=True)
+    @tf.function  # fixed shapes (batches are padded): one trace
     def batch_loss_grad(xc, wi, wt, seed):
         with tf.GradientTape() as tape:
             tape.watch(xc)

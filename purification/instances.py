@@ -110,7 +110,7 @@ class Scorer:
         if not purifier.identity:
             p = purifier
 
-            @tf.function(reduce_retracing=True)
+            @tf.function  # fixed shapes (batches are padded): one trace
             def purify(w, seed):
                 return p(w, seed, "full")
 

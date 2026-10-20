@@ -60,6 +60,10 @@ def _conv(x, wb, stride: int = 1):
     return tf.nn.conv1d(x, w, stride=stride, padding="SAME") + b
 
 
+def _silu(x):
+    return x * tf.sigmoid(x)  # tf.nn.silu does not exist in older TF 2.x
+
+
 def _dense(x, wb):
     w, b = wb
     return tf.matmul(x, w) + b
@@ -142,10 +146,10 @@ class UNet1D(tf.Module):
 
     # ------------------------------------------------------------------ forward
     def _res(self, blk, x, temb, training):
-        h = tf.nn.silu(_group_norm(x, blk["n1"], self.groups))
+        h = _silu(_group_norm(x, blk["n1"], self.groups))
         h = _conv(h, blk["c1"])
         h = h + _dense(temb, blk["t"])[:, None, :]
-        h = tf.nn.silu(_group_norm(h, blk["n2"], self.groups))
+        h = _silu(_group_norm(h, blk["n2"], self.groups))
         if training and self.dropout > 0:
             h = tf.nn.dropout(h, rate=self.dropout)
         h = _conv(h, blk["c2"])
@@ -158,7 +162,7 @@ class UNet1D(tf.Module):
         pad = (-length) % self.multiple
         x_in = tf.concat([tf.repeat(x[:, :1, :], pad, axis=1), x], axis=1)
         temb = timestep_embedding(t, self.temb_dim)
-        temb = _dense(tf.nn.silu(_dense(temb, self.t1)), self.t2)
+        temb = _dense(_silu(_dense(temb, self.t1)), self.t2)
         h = _conv(x_in, self.inp)
         skips = [h]
         for blocks, ds in zip(self.down, self.downsample):
@@ -175,7 +179,7 @@ class UNet1D(tf.Module):
                 h = self._res(blk, tf.concat([h, skips.pop()], axis=-1), temb, training)
             if us is not None:
                 h = _conv(tf.repeat(h, 2, axis=1), us)
-        h = tf.nn.silu(_group_norm(h, self.out_norm, self.groups))
+        h = _silu(_group_norm(h, self.out_norm, self.groups))
         out = _conv(h, self.out)
         return out[:, pad:, :]
 
