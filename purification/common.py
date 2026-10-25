@@ -86,3 +86,15 @@ def data_digest(dataset: str) -> dict:
     xt, yt, _ = load_test_data(dataset, scaler=load_scaler(dataset), no_transform=True)
     h = lambda a: hashlib.sha256(np.ascontiguousarray(np.asarray(a, dtype=np.float64)).tobytes()).hexdigest()
     return dict(train=h(raw), test=h(xt), labels=h(np.asarray(yt).astype(float)))
+
+
+def check_data_digests(dataset: str, expected) -> None:
+    """Exit with code 5 unless the data have the expected digests (train, test, labels)."""
+    import sys
+    digest = data_digest(dataset)
+    expected = dict(zip(("train", "test", "labels"), expected))
+    for k in expected:
+        print(f"data digest {k}: {digest[k]} ({'OK' if digest[k] == expected[k] else 'MISMATCH'})", flush=True)
+    if digest != expected:
+        print("ERROR: the data differ from the expected ones", flush=True)
+        sys.exit(5)

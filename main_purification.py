@@ -42,7 +42,11 @@ def add_common(ap):
     ap.add_argument("--diffusion", default=None, help="folder written by main_train_diffusion.py")
     ap.add_argument("--steps", type=int, default=10, help="denoising steps K (respaced DDPM)")
     ap.add_argument("--sampler", choices=["ddpm", "ddim"], default="ddpm")
-    ap.add_argument("--context", type=int, default=64, help="minimum purified window length")
+    ap.add_argument("--context", type=int, default=128,
+                    help="minimum purified window length (default: the diffusion training window)")
+    ap.add_argument("--lookahead", default="0",
+                    help="purifier look-ahead d in rows, or a check.json written by "
+                         "purification/check_denoiser.py (its chosen_lookahead)")
     ap.add_argument("--target-offset", type=int, default=0)
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--out", required=True)
@@ -66,18 +70,32 @@ def parse_args():
     return ap.parse_args()
 
 
+def resolve_lookahead(spec: str) -> int:
+    """An integer, or the chosen_lookahead of a check_denoiser.py report (which must
+    have passed its gate)."""
+    try:
+        return int(spec)
+    except ValueError:
+        with open(spec) as fd:
+            check = json.load(fd)
+        if not check.get("passed"):
+            raise SystemExit(f"{spec}: the denoiser check did not pass")
+        return int(check["chosen_lookahead"])
+
+
 def calibrate(args) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     tf.random.set_seed(args.seed)
     model, model_type, history, params, name = load_detector(args.model_dir)
-    geom = make_geometry(model_type, history, args.target_offset, args.context)
+    lookahead = resolve_lookahead(args.lookahead)
+    geom = make_geometry(model_type, history, args.target_offset, args.context, lookahead)
     x_train, x_test, y_test, cols = load_data(args.dataset)
     splits = build_splits(args.dataset, x_train, x_test, y_test, geom)
     percentiles, windows = GRIDS[args.grid]
     metric = args.metric or (params.get("threshold_selection_metric") or ["F1"])[0]
     max_fpr = args.max_fpr if args.max_fpr is not None else params.get("threshold_max_fpr", 0.05)
-    print(f"{name}: {model_type} history={history} window length Lw={geom.length}; "
+    print(f"{name}: {model_type} history={history} window length Lw={geom.length}, look-ahead {geom.lookahead}; "
           f"validation {len(splits.val_targets)}, tuning {len(splits.tune_targets)} "
           f"(offset {splits.tune_offset}), final {len(splits.final_targets)} (offset {splits.final_offset}) "
           f"targets; grid={args.grid} metric={metric} max_fpr={max_fpr}", flush=True)
@@ -101,7 +119,8 @@ def calibrate(args) -> int:
         res = grid_search(val, tune, splits.tune_labels, final0, splits.final_labels, model_type,
                           percentiles, windows, metric, max_fpr)
         record = dict(model=name, model_dir=args.model_dir, model_type=model_type, history=history,
-                      geometry=dict(length=geom.length, offset=geom.offset, context=args.context),
+                      geometry=dict(length=geom.length, offset=geom.offset, context=args.context,
+                                    lookahead=geom.lookahead, lookahead_source=args.lookahead),
                       purifier=purifier.describe(), diffusion=args.diffusion,
                       diffusion_best_step=(diff_cfg or {}).get("best_step"),
                       grid=args.grid, metric=metric, max_fpr=max_fpr, selection=res,
@@ -127,7 +146,8 @@ def calibrate(args) -> int:
         with open(out / f"{tag}.json", "w") as fd:
             json.dump(record, fd, indent=1, default=float)
         defense = dict(model_dir=args.model_dir, model=name, model_type=model_type, history=history,
-                       target_offset=args.target_offset, context=args.context, diffusion=args.diffusion,
+                       target_offset=args.target_offset, context=args.context, lookahead=geom.lookahead,
+                       diffusion=args.diffusion,
                        t_star=t_star, steps=args.steps, sampler=args.sampler,
                        theta=res["theta"], window=res["window"], percentile=res["percentile"],
                        calibration=str(out / f"{tag}.json"))

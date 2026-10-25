@@ -70,7 +70,8 @@ def add_attack_args(ap):
     ap.add_argument("--eot", type=int, default=20, help="EOT samples per iteration (1 if deterministic)")
     ap.add_argument("--eval-draws", type=int, default=10)
     ap.add_argument("--trace-every", type=int, default=10)
-    ap.add_argument("--attack-batch", type=int, default=256)
+    ap.add_argument("--attack-batch", type=int, default=128,
+                    help="windows per gradient batch (GPU memory grows linearly with it)")
     ap.add_argument("--max-minutes", type=float, default=600.0,
                     help="stop the PGD loop after this wall time and evaluate the point reached "
                          "(the job limit is 12 h); recorded as stopped_early")
@@ -111,7 +112,8 @@ def run_attack(args) -> int:
         raise SystemExit(f"{out}/summary.json exists; use a new --out (nothing is overwritten)")
     out.mkdir(parents=True, exist_ok=True)
     model, model_type, history, params, name = load_detector(dfn["model_dir"])
-    geom = make_geometry(model_type, history, int(dfn["target_offset"]), int(dfn["context"]))
+    geom = make_geometry(model_type, history, int(dfn["target_offset"]), int(dfn["context"]),
+                         int(dfn.get("lookahead", 0)))
     x_train, x_test, y_test, cols = load_data(args.dataset)
     splits = build_splits(args.dataset, x_train, x_test, y_test, geom)
     if args.split == "tune":
@@ -145,7 +147,8 @@ def run_attack(args) -> int:
         raise SystemExit("no target of the requested kind in this split")
     targets = sample_segment_blocks(cand, args.max_targets) if 0 < args.max_targets < len(cand) else cand
     near = det.near(targets)
-    print(f"{name} | defense t*={p_def.t_star} K={p_def.n_steps} {dfn['sampler']} theta={det.theta:.6g} "
+    print(f"{name} | defense t*={p_def.t_star} K={p_def.n_steps} {dfn['sampler']} Lw={geom.length} "
+          f"look-ahead={geom.lookahead} theta={det.theta:.6g} "
           f"w={det.window} | attacker: {args.gradient} (t*={p_att.t_star}, K={p_att.n_steps}, EOT={eot}) | "
           f"{args.goal} on the {args.split} split: {len(targets)} targets, {len(near)} scored timesteps",
           flush=True)
@@ -181,7 +184,7 @@ def run_attack(args) -> int:
     protected = actuator_indices(cols) if args.protect_actuators else []
     if protected:
         eps[protected] = 0.0
-    widx_global = window_index(c_off + loss_targets, geom)          # (n, Lw)
+    widx_global = window_index(c_off + loss_targets, geom, len(x_test))  # (n, Lw)
     rows = np.unique(widx_global)
     pos = {r: i for i, r in enumerate(rows)}
     widx = np.vectorize(pos.get)(widx_global).astype(np.int64)      # into the compact rows
@@ -191,8 +194,8 @@ def run_attack(args) -> int:
     # the detector's own input rows (history + target, AE: target), as in the
     # undefended benchmark. Other rows would only receive random-start noise.
     if p_att.identity:
-        a, b = (geom.length - 1, geom.length) if model_type == "AE" else geom.hist_slice
-        used = np.unique(np.concatenate([widx[:, a:b].ravel(), widx[:, -1]]))
+        a, b = (geom.target_pos, geom.target_pos + 1) if model_type == "AE" else geom.hist_slice
+        used = np.unique(np.concatenate([widx[:, a:b].ravel(), widx[:, geom.target_pos]]))
         row_mask = np.zeros(len(rows), np.float32)
         row_mask[used] = 1.0
     else:
@@ -251,8 +254,12 @@ def run_attack(args) -> int:
         writer = csv.DictWriter(fd, fieldnames=fields)
         writer.writeheader()
         for restart in range(args.restarts):
-            rng = tf.random.Generator.from_seed(args.seed * 7919 + restart)
-            delta = (rng.uniform(tf.shape(x0c), -1.0, 1.0) * eps_tf * feat_mask)
+            # random start drawn for the WHOLE series and then restricted to the
+            # modifiable rows, so a row gets the same start whatever the window
+            # geometry (context / look-ahead) that made it modifiable
+            u = tf.random.stateless_uniform([len(x_test), x_test.shape[1]],
+                                            seed=[args.seed, 7919 + restart], minval=-1.0, maxval=1.0)
+            delta = tf.gather(u, rows) * eps_tf * feat_mask
             x0 = tf.constant(x0c)
             if stopped_early is not None:
                 break

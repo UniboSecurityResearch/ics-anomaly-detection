@@ -38,7 +38,9 @@ fi
 : "${EOT:?set EOT (chosen in phase 1)}"
 : "${ITERS:?set ITERS (chosen in phase 1)}"
 : "${BUDGETS:?set BUDGETS, e.g. \"0.05 0.10\"}"
-CONTEXT="${CONTEXT:-64}"
+CONTEXT="${CONTEXT:-128}"
+# purifier look-ahead: the value chosen by the phase 1 denoiser check (or an integer)
+LOOKAHEAD="${LOOKAHEAD:-outputs/purification/phase1_v2/denoiser_check/check.json}"
 SAMPLER="${SAMPLER:-ddpm}"
 
 git fetch -q origin
@@ -51,7 +53,7 @@ fi
 if [[ ! -f "$DIFF/weights.npz" ]]; then echo "ERROR: $DIFF not trained (phase 1)"; exit 1; fi
 if [[ -e "$P2/jobs.txt" ]]; then echo "ERROR: $P2/jobs.txt exists: phase 2 was already queued."; exit 1; fi
 mkdir -p "$P2/tasks"
-echo "commit $(git rev-parse --short HEAD), $(date -Is); T_STAR=$T_STAR STEPS=$STEPS EOT=$EOT ITERS=$ITERS BUDGETS=$BUDGETS CONTEXT=$CONTEXT SAMPLER=$SAMPLER" > "$P2/commit.txt"
+echo "commit $(git rev-parse --short HEAD), $(date -Is); T_STAR=$T_STAR STEPS=$STEPS EOT=$EOT ITERS=$ITERS BUDGETS=$BUDGETS CONTEXT=$CONTEXT LOOKAHEAD=$LOOKAHEAD SAMPLER=$SAMPLER" > "$P2/commit.txt"
 
 K=$STEPS; if (( T_STAR < K )); then K=$T_STAR; fi
 TAG0=$(printf "tstar%04d_k%03d_%s" 0 0 "$SAMPLER")
@@ -67,7 +69,7 @@ submit() {
 for RUN in "${RUNS[@]}"; do
     MODEL=models/$RUN
     CAL=$P2/$RUN/calib
-    echo "$CAL main_purification.py calibrate --dataset SWAT-CLEAN --model-dir $MODEL --diffusion $DIFF --context $CONTEXT --steps $STEPS --sampler $SAMPLER --t-star 0 $T_STAR --draws 10 --out $CAL" > "$P2/tasks/$RUN.calib.txt"
+    echo "$CAL main_purification.py calibrate --dataset SWAT-CLEAN --model-dir $MODEL --diffusion $DIFF --context $CONTEXT --lookahead $LOOKAHEAD --steps $STEPS --sampler $SAMPLER --t-star 0 $T_STAR --draws 10 --out $CAL" > "$P2/tasks/$RUN.calib.txt"
     BASE="--dataset SWAT-CLEAN --model-dir $MODEL --split final --max-targets 2048 --alpha-relative 0.10 --eval-draws 10 --trace-every 10 --seed 42 --protect-actuators --iterations $ITERS"
     : > "$P2/tasks/$RUN.attacks.txt"
     for B in $BUDGETS; do

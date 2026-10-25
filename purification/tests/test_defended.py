@@ -37,18 +37,24 @@ def test_identity_matches_attack_suite():
     targets = np.arange(100, 300, 7)
     ident = Purifier(None, 0, 0)
     for model, mtype, hist in ((ae, "AE", None), (seq, "CNN", 12)):
-        geom = make_geometry(mtype, hist, 0, 64)
-        with tf.GradientTape(persistent=True) as tape:
-            tape.watch(series)
-            mine = errors_tf(model, ident, tf.gather(series, window_index(targets, geom)), geom, seed_pair(0))
-            ref = model_errors_tf(model, series, mtype, targets, hist, 0)
-            l1, l2 = tf.reduce_sum(mine), tf.reduce_sum(ref)
-        g1 = tf.convert_to_tensor(tape.gradient(l1, series)).numpy()
-        g2 = tf.convert_to_tensor(tape.gradient(l2, series)).numpy()
-        assert np.allclose(mine.numpy(), ref.numpy(), rtol=1e-6, atol=1e-7), mtype
-        assert np.allclose(g1, g2, rtol=1e-5, atol=1e-6), mtype
-        print(f"{mtype}: identity errors and gradients equal the attack suite's "
-              f"(max |dg| {np.abs(g1 - g2).max():.2e})")
+        for la in (0, 3):
+            geom = make_geometry(mtype, hist, 0, 64, la)
+            with tf.GradientTape(persistent=True) as tape:
+                tape.watch(series)
+                win = tf.gather(series, window_index(targets, geom, n))
+                mine = errors_tf(model, ident, win, geom, seed_pair(0))
+                ref = model_errors_tf(model, series, mtype, targets, hist, 0)
+                l1, l2 = tf.reduce_sum(mine), tf.reduce_sum(ref)
+            g1 = tf.convert_to_tensor(tape.gradient(l1, series)).numpy()
+            g2 = tf.convert_to_tensor(tape.gradient(l2, series)).numpy()
+            assert np.allclose(mine.numpy(), ref.numpy(), rtol=1e-6, atol=1e-7), mtype
+            assert np.allclose(g1, g2, rtol=1e-5, atol=1e-6), mtype
+            print(f"{mtype} look-ahead {la}: identity errors and gradients equal the attack "
+                  f"suite's (max |dg| {np.abs(g1 - g2).max():.2e})")
+    # windows near the end of the series stay inside it
+    geom = make_geometry("AE", None, 0, 8, 3)
+    idx = window_index(np.array([n - 1]), geom, n)
+    assert idx.max() == n - 1 and idx[0, geom.target_pos] == n - 1
 
 
 def test_gradient_through_purifier():
@@ -59,7 +65,7 @@ def test_gradient_through_purifier():
         v.assign(v + 0.05 * tf.random.stateless_normal(v.shape, seed=[1, 2]))
     ae, seq = toy_models(d)
     for model, mtype, hist in ((ae, "AE", None), (seq, "CNN", 12)):
-        geom = make_geometry(mtype, hist, 0, 16)
+        geom = make_geometry(mtype, hist, 0, 16, 2)
         x = tf.constant(rng.standard_normal((6, geom.length, d)), tf.float32)
         direction = tf.constant(rng.standard_normal(x.shape), tf.float32)
         for t_star, k in ((30, 5), (100, 10)):
