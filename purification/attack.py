@@ -67,6 +67,11 @@ def add_attack_args(ap):
     ap.add_argument("--alpha-relative", type=float, default=0.10)
     ap.add_argument("--iterations", type=int, default=200)
     ap.add_argument("--restarts", type=int, default=1)
+    ap.add_argument("--no-random-start", action="store_true",
+                    help="start PGD from the clean series (restarts are then identical)")
+    ap.add_argument("--modifiable", choices=["detector", "window"], default="detector",
+                    help="rows the attacker may change: those feeding the undefended detector "
+                         "(same threat model for every arm; default) or whole purified windows")
     ap.add_argument("--eot", type=int, default=20, help="EOT samples per iteration (1 if deterministic)")
     ap.add_argument("--eval-draws", type=int, default=10)
     ap.add_argument("--trace-every", type=int, default=10)
@@ -189,13 +194,18 @@ def run_attack(args) -> int:
     pos = {r: i for i, r in enumerate(rows)}
     widx = np.vectorize(pos.get)(widx_global).astype(np.int64)      # into the compact rows
     x0c = x_test[rows].astype(np.float32)
-    # Rows that can change: those that feed the ATTACKER's loss. Through a purifier
-    # that is the whole Lw-row window; without one (undefended / blind attacker) only
-    # the detector's own input rows (history + target, AE: target), as in the
-    # undefended benchmark. Other rows would only receive random-start noise.
-    if p_att.identity:
-        a, b = (geom.target_pos, geom.target_pos + 1) if model_type == "AE" else geom.hist_slice
-        used = np.unique(np.concatenate([widx[:, a:b].ravel(), widx[:, geom.target_pos]]))
+    # Rows that can change (the threat model). "detector" (default): the rows that
+    # feed the UNDEFENDED detector at the loss targets (target row, plus the history
+    # rows for sequence models) -- the convention of the undefended benchmark
+    # (swat_sweep.sbatch), the SAME set for the undefended, defended and blind
+    # arms, so the defense is compared under one threat model; the purifier also
+    # sees unmodified context rows. "window": every row of the purified windows
+    # (a stronger attacker who also controls the context the defense adds; it was
+    # the only option in the first phase-1_v2 attacks, where it gave the defended
+    # arms far more modifiable rows than the undefended one).
+    a, b = (geom.target_pos, geom.target_pos + 1) if model_type == "AE" else geom.hist_slice
+    used = np.unique(np.concatenate([widx[:, a:b].ravel(), widx[:, geom.target_pos]]))
+    if args.modifiable == "detector" or p_att.identity:
         row_mask = np.zeros(len(rows), np.float32)
         row_mask[used] = 1.0
     else:
@@ -260,6 +270,8 @@ def run_attack(args) -> int:
             u = tf.random.stateless_uniform([len(x_test), x_test.shape[1]],
                                             seed=[args.seed, 7919 + restart], minval=-1.0, maxval=1.0)
             delta = tf.gather(u, rows) * eps_tf * feat_mask
+            if args.no_random_start:
+                delta = tf.zeros_like(delta)
             x0 = tf.constant(x0c)
             if stopped_early is not None:
                 break
@@ -327,7 +339,10 @@ def run_attack(args) -> int:
                       iterations=args.iterations, restarts=args.restarts,
                       alpha_relative=args.alpha_relative,
                       epsilon_range_fraction=args.epsilon_range_fraction,
-                      protect_actuators=bool(args.protect_actuators), seed=args.seed),
+                      protect_actuators=bool(args.protect_actuators), seed=args.seed,
+                      modifiable=("window" if (args.modifiable == "window" and not p_att.identity)
+                                  else "detector"),
+                      modifiable_rows=int(row_mask.sum()), random_start=not args.no_random_start),
         n_targets=int(len(targets)), n_eligible=int(eligible.sum()), eval_draws=draws,
         stopped_early=stopped_early,
         clean=dict(per_draw=clean_draws, flagged_mean=float(clean.mean()),

@@ -53,9 +53,17 @@ the test file with the same metric and FPR cap), and is reported on the final pa
   references;
 * the same budget and mask conventions as the undefended benchmark
   (`swat_sweep.sbatch`): L-inf box of a fraction of each feature's training range,
-  actuators protected, only rows feeding the loss may change, sign steps of
-  `alpha_relative x eps`, random start; evasion loss on the targets the (defended)
-  detector flags on clean data (E), false-alarm loss on normal targets;
+  actuators protected, sign steps of `alpha_relative x eps`, random start; evasion
+  loss on the targets the (defended) detector flags on clean data (E), false-alarm
+  loss on normal targets;
+* **one threat model for every arm** (`--modifiable detector`, default): the attacker
+  may change the rows that feed the UNDEFENDED detector at the loss targets (target
+  row, plus history rows for sequence models), whether or not a purifier is present;
+  the purifier also reads unmodified context rows. `--modifiable window` lets the
+  attacker change the whole purified windows (a stronger attacker that also controls
+  the context the defense adds); in the first phase-1_v2 attacks this was the only
+  option, which gave the defended arms far more modifiable rows than the undefended
+  one -- those results are kept as that stronger-attacker reference;
 * the stochastic defense is evaluated with **fresh randomness** over several draws
   (mean +- std); the undefended reference (`t* = 0`) uses the same code.
 
@@ -108,8 +116,8 @@ All on the **tuning** split, AE seed 7:
 
 1. *utility*: keep the `t*` whose defended tuning F1 is at least the undefended
    tuning F1 minus 0.05 (absolute);
-2. *robustness*: among them, the `t*` with the highest worst-case detection rate on E
-   under evasion at budget 0.05 (worst case over the full-gradient, surrogate, BPDA
+2. *robustness*: among them, the `t*` with the highest worst-case detection rate over
+   all attack targets (see the note on E below) under evasion at budget 0.05 (worst case over the full-gradient, surrogate, BPDA
    and blind attackers that were run at that `t*`, otherwise over the full-gradient
    one); ties (within 1 percentage point) go to the smaller `t*`; false-alarm
    robustness is the tie-break after that;
@@ -131,5 +139,14 @@ defense.
    (EOT and iteration saturation, surrogate, BPDA, blind, huge budget) and defense
    variants (K, DDIM), queued in order of priority. The configuration for phase 2 is
    chosen here.
+1b. `purification_phase1b.sh`: the phase-1_v2 attacks redone with one threat model
+   for every arm, the whole-range sanity check redone from the clean series with
+   small steps (with steps of 10% of the range and a random start over the whole
+   range, sign-PGD failed even on the undefended detector: 0% evasion; from the clean
+   series with 1% steps: 96% on the development AE), and two more step sizes.
 2. phase 2 (all detectors, **final** split): undefended vs defended under the
    attacks chosen in phase 1.
+
+Evasion comparisons across `t*` use the detection rate over ALL attack targets
+after the attack (`flagged`), not only over E: E is the set each detector flags on
+clean data, so it differs between `t*` and DR on E is not comparable across them.
