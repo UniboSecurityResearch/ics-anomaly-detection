@@ -41,7 +41,8 @@ def add_common(ap):
     ap.add_argument("--model-dir", required=True)
     ap.add_argument("--diffusion", default=None, help="folder written by main_train_diffusion.py")
     ap.add_argument("--steps", type=int, default=10, help="denoising steps K (respaced DDPM)")
-    ap.add_argument("--sampler", choices=["ddpm", "ddim"], default="ddpm")
+    ap.add_argument("--sampler", choices=["ddpm", "ddim", "noise"], default="ddpm",
+                    help="noise = ablation: forward noise of t* only, no denoiser")
     ap.add_argument("--context", type=int, default=128,
                     help="minimum purified window length (default: the diffusion training window)")
     ap.add_argument("--lookahead", default="0",

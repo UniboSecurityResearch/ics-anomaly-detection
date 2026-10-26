@@ -72,6 +72,9 @@ def add_attack_args(ap):
     ap.add_argument("--modifiable", choices=["detector", "window"], default="detector",
                     help="rows the attacker may change: those feeding the undefended detector "
                          "(same threat model for every arm; default) or whole purified windows")
+    ap.add_argument("--loss", choices=["mean", "log"], default="mean",
+                    help="PGD objective over the loss targets: mean instance score (default) or "
+                         "mean log score, which keeps targets far above theta from dominating")
     ap.add_argument("--eot", type=int, default=20, help="EOT samples per iteration (1 if deterministic)")
     ap.add_argument("--eval-draws", type=int, default=10)
     ap.add_argument("--trace-every", type=int, default=10)
@@ -100,7 +103,7 @@ class DefendedDetector:
             keep[max(t - margin, self.first):min(t + margin + 1, self.len)] = True
         return np.flatnonzero(keep)
 
-    def decide(self, series, local_targets, near_local, seed_base, full=False):
+    def decide(self, series, local_targets, near_local, seed_base, full=False, return_scores=False):
         """Window decisions at local_targets. Scores outside `near_local` are not
         needed (they cannot reach a target through the window) and are left at 0."""
         positions = np.arange(self.first, self.len) if full else near_local
@@ -108,7 +111,10 @@ class DefendedDetector:
         errs = self.scorer.errors(series, self.offset + positions, seed_base)
         scores[positions - self.first] = errs.mean(axis=1)
         det = repo_cached_detect(scores, self.theta, self.window, self.model_type, "same")
-        return det[local_targets - self.first].astype(bool)
+        out = det[local_targets - self.first].astype(bool)
+        if return_scores:
+            return out, scores[near_local - self.first]
+        return out
 
 
 def reproduction_ok(path) -> tuple:
@@ -187,7 +193,13 @@ def run_attack(args) -> int:
         if not np.array_equal(a, b):
             raise RuntimeError("near-only detection does not reproduce the full detector")
 
-    clean = np.stack([det.decide(x_test, targets, near, 10_000_000 + d) for d in range(draws)])
+    clean_list, clean_scores = [], None
+    for d in range(draws):
+        dec, sc = det.decide(x_test, targets, near, 10_000_000 + d, return_scores=True)
+        clean_list.append(dec)
+        clean_scores = sc if clean_scores is None else clean_scores + sc
+    clean = np.stack(clean_list)
+    clean_scores = clean_scores / draws
     if args.goal == "evasion":
         eligible = clean.mean(axis=0) > 0.5
         loss_targets = targets[eligible]
@@ -254,7 +266,10 @@ def run_attack(args) -> int:
             tape.watch(xc)
             windows = tf.gather(xc, wi)
             errs = errors_tf(model, p_att, windows, geom, seed, g_mode)
-            loss = tf.reduce_sum(tf.reduce_mean(errs, axis=1) * wt) * sign
+            inst = tf.reduce_mean(errs, axis=1)
+            if args.loss == "log":
+                inst = tf.math.log(inst + 1e-12)
+            loss = tf.reduce_sum(inst * wt) * sign
         return loss, tf.convert_to_tensor(tape.gradient(loss, xc))
 
     def eot_loss_grad(xc, restart, it):
@@ -326,11 +341,17 @@ def run_attack(args) -> int:
                 delta = tf.clip_by_value(delta - alpha * tf.sign(g), -eps_tf, eps_tf) * feat_mask
 
     # ---- final evaluation with fresh randomness -----------------------------------
-    results = {}
+    results, per_point = {}, {}
     for key, point in (("final_iterate", final_point), ("best_loss", best)):
         series = series_of(point["xc"])
-        dets = np.stack([det.decide(series, targets, near, 20_000_000 + 1000 * d + (key == "best_loss"))
-                         for d in range(draws)])
+        dl, sc_sum = [], None
+        for d in range(draws):
+            dec, sc = det.decide(series, targets, near, 20_000_000 + 1000 * d + (key == "best_loss"),
+                                 return_scores=True)
+            dl.append(dec)
+            sc_sum = sc if sc_sum is None else sc_sum + sc
+        dets = np.stack(dl)
+        per_point[key] = dict(flag_rate=dets.mean(axis=0), scores=sc_sum / draws)
         per_draw = [metrics_of(x) for x in dets]
         delta_np = point["xc"] - x0c
         if np.any(np.abs(delta_np) > eps[None, :] + 1e-5):
@@ -358,7 +379,7 @@ def run_attack(args) -> int:
     summary = dict(
         model=name, model_dir=dfn["model_dir"], model_type=model_type, dataset=args.dataset,
         defense=dict(dfn, purifier=p_def.describe()), goal=args.goal, split=args.split,
-        attacker=dict(gradient=args.gradient, purifier=p_att.describe(), eot=eot,
+        attacker=dict(gradient=args.gradient, purifier=p_att.describe(), eot=eot, loss=args.loss,
                       iterations=args.iterations, restarts=args.restarts,
                       alpha_relative=args.alpha_relative,
                       epsilon_range_fraction=args.epsilon_range_fraction,
@@ -375,6 +396,20 @@ def run_attack(args) -> int:
     with open(out / "summary.json", "w") as fd:
         json.dump(summary, fd, indent=1, default=float)
     np.save(out / "targets_local.npy", targets)
+    # per-target and per-timestep record (small; kept by the report archive, unlike *.npz):
+    # targets and scored timesteps as local indices of the split chunk, the eligible set E,
+    # per-target detection rate over the evaluation draws, mean instance score per
+    # scored timestep, clean and at the reported point; the label of each scored timestep
+    lab_near = np.asarray(labels_all).astype(int)[near - first]
+    with open(out / "per_target.json", "w") as fd:
+        json.dump(dict(chunk_offset=int(c_off), first=int(first), theta=float(det.theta), window=int(det.window),
+                       targets=targets.tolist(), eligible=eligible.astype(int).tolist(),
+                       clean_flag_rate=np.round(clean.mean(axis=0), 4).tolist(),
+                       adv_flag_rate=np.round(per_point[pick]["flag_rate"], 4).tolist(),
+                       scored=near.tolist(), scored_label=lab_near.tolist(),
+                       modifiable=np.isin(near + c_off, rows[row_mask > 0]).astype(int).tolist(),
+                       clean_score=[float(f"{v:.6g}") for v in clean_scores],
+                       adv_score=[float(f"{v:.6g}") for v in per_point[pick]["scores"]]), fd)
     r = results[pick]
     print(f"RESULT {name} t*={p_def.t_star} {args.gradient} {args.goal}: clean flagged "
           f"{clean.mean():.4f} -> adversarial {r['flagged_mean']:.4f}+-{r['flagged_std']:.4f}"

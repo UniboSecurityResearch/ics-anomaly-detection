@@ -145,13 +145,24 @@ defense.
    range, sign-PGD failed even on the undefended detector: 0% evasion; from the clean
    series with 1% steps: 96% on the development AE), and two more step sizes.
 2. `purification_phase2.sh` (all 18 detectors, **final** split, 512 targets per
-   attack, the phase-1b threat model): undefended vs defended under the attacks chosen
-   in phase 1b, queued as one calibration array and one attack array in order of
-   priority (main budget for every detector, other budgets, attacker variants on
-   seed 7, the `t*` curve for AE seed 7, convergence and diagnostics); `--plan`
-   writes and counts the tasks without queueing. Every attack refuses to run (exit
-   3) if its detector's `t* = 0` calibration did not reproduce the stored detector
-   (`--require-reproduction`).
+   attack, the phase-1b threat model): a short diagnostic on the tuning split (`p0`,
+   per-target records), the calibrations (also a noise-only ablation and the causal
+   purifier for AE seed 7), then one attack array in order of priority: P1 main
+   budget for every detector; P2 attack strength on seed 7 (surrogate, BPDA, blind,
+   EOT 1, log-score loss, 3 restarts); P3 mechanism and ablations (actuators free,
+   stronger attacker, noise only, causal, whole range); P4 the `t*` curve; P5 step
+   0.025 x 500 it.; P6 2048 targets; P7 the other budgets. The attack array is
+   queued on hold until `p0` has been checked. `--plan` writes and counts the tasks
+   without queueing. Every attack refuses to run (exit 3) if its detector's `t* = 0`
+   calibration did not reproduce the stored detector (`--require-reproduction`).
+
+Tools added for phase 2: `--loss log` (PGD on the mean log score, so targets far
+above `theta` do not dominate the objective), `--sampler noise` (ablation: the
+forward noise of `t*` rescaled to the input, no denoiser), `per_target.json` in every
+attack folder (targets, E, per-target detection rates, scores of the scored
+timesteps clean and attacked, which of them were modifiable) and
+`purification_per_target.py` (decision geometry, per-block results, 95% bootstrap
+intervals over blocks, paired differences between arms).
 
 ### Outcome of phase 1b (AE seed 7, tuning split, 512 targets)
 
@@ -175,7 +186,13 @@ defense.
 * Budget-insensitive floors (`t* = 0`: 0.4805 flagged and 0.4434 false alarms at both
   0.05 and 0.10) suggest structural limits of the threat model (protected actuators;
   a false alarm needs `w` consecutive scores above `theta`, which bounds it by the
-  geometry of the target blocks). Phase 2 P6 checks the first with actuators free.
+  geometry of the target blocks). Checked on the 1b targets: the share of targets
+  whose window lies entirely inside the target blocks is 0.4434 (false alarm, w=20;
+  0.7363 for w=10) and 0.4805 (evasion, w=20) -- exactly the undefended results.
+  For false alarm this is the ceiling (blocks of ~34 rows, w consecutive rows above
+  theta needed). For evasion the coincidence is not explained yet (pushing any row of
+  a block below theta would also clear interior targets): phase 2 `p0` reruns these
+  attacks with per-target records. Phase 2 P3 also runs with actuators free.
 
 Evasion comparisons across `t*` use the detection rate over ALL attack targets
 after the attack (`flagged`), not only over E: E is the set each detector flags on

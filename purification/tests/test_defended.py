@@ -109,7 +109,31 @@ def test_seed_determinism():
     print("purifier: same seed -> same output, different seed -> different output")
 
 
+def test_noise_ablation():
+    """sampler "noise": x + sqrt((1-ab)/ab) z with the forward noise of t*, no denoiser;
+    reproducible from the seed; BPDA backward pass is the identity."""
+    from purification import schedule as S
+    rng = np.random.default_rng(1)
+    x = tf.constant(rng.standard_normal((3, 16, 4)), tf.float32)
+    t_star = 50
+    p = Purifier(None, t_star, 10, "noise")
+    assert p.n_steps == 0 and not p.identity
+    y1 = p(x, seed_pair(5)).numpy()
+    y2 = p(x, seed_pair(5)).numpy()
+    assert np.array_equal(y1, y2)
+    ab = S.alpha_bars()[t_star]
+    z = (y1 - x.numpy()) / np.sqrt((1 - ab) / ab)
+    assert abs(z.std() - 1.0) < 0.15 and abs(z.mean()) < 0.15
+    with tf.GradientTape() as tape:
+        tape.watch(x)
+        loss = tf.reduce_sum(p(x, seed_pair(5), "bpda") ** 2)
+    g = tape.gradient(loss, x).numpy()
+    assert np.allclose(g, 2 * y1, rtol=1e-5, atol=1e-5)
+    print(f"noise ablation: residual std {z.std():.3f} (expected 1), BPDA gradient = identity")
+
+
 if __name__ == "__main__":
+    test_noise_ablation()
     test_identity_matches_attack_suite()
     test_gradient_through_purifier()
     test_seed_determinism()

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import numpy as np
 import tensorflow as tf
 
 from . import schedule as S
@@ -32,16 +33,18 @@ class Purifier:
                  T: int = S.T_DEFAULT):
         if t_star < 0 or t_star > T:
             raise ValueError("t_star must be in [0, T]")
-        if t_star > 0 and denoiser is None:
+        if t_star > 0 and denoiser is None and sampler != "noise":
             raise ValueError("a denoiser is required for t_star > 0")
-        if sampler not in ("ddpm", "ddim"):
+        if sampler not in ("ddpm", "ddim", "noise"):
             raise ValueError(sampler)
         self.denoiser = denoiser
         self.t_star = int(t_star)
         self.sampler = sampler
         self.T = T
         self.steps = S.respaced_timesteps(self.t_star, n_steps)
-        self.coeffs = S.step_coefficients(self.steps, T) if self.t_star > 0 else []
+        # "noise": ablation without the denoiser -- the forward noise of t* only, rescaled
+        # to the input scale (x + sqrt((1-ab)/ab) z); no reverse step
+        self.coeffs = S.step_coefficients(self.steps, T) if self.t_star > 0 and sampler != "noise" else []
         self.n_steps = len(self.coeffs)
 
     @property
@@ -67,6 +70,13 @@ class Purifier:
                 shape, seed=seed + tf.constant([0, 1_000_003], tf.int64) * (i + 1), dtype=x.dtype)
 
         x_t = S.diffuse(x, self.t_star, noise(0), self.T)
+        if self.sampler == "noise":
+            x0 = x_t / tf.cast(np.sqrt(S.alpha_bars(self.T)[self.t_star]), x.dtype)
+            if gradient == "full":
+                return x0
+            if gradient == "bpda":
+                return x + tf.stop_gradient(x0 - x)
+            raise ValueError(f"unknown gradient mode {gradient}")
         noises = [noise(i + 1) for i in range(len(self.coeffs))]
         x0 = S.reverse(x_t, self._eps, self.coeffs, noises, self.sampler)
         if gradient == "full":

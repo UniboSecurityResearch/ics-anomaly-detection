@@ -32,7 +32,7 @@ def attack_rows(root):
             goal=s["goal"], t_star=s["defense"]["t_star"], steps=s["defense"]["purifier"]["n_denoising_steps"],
             sampler=s["defense"]["sampler"], theta=s["defense"]["theta"], window=s["defense"]["window"],
             attacker=a["gradient"], attacker_steps=a["purifier"]["n_denoising_steps"], eot=a["eot"],
-            iterations=a["iterations"], restarts=a["restarts"], alpha_rel=a["alpha_relative"],
+            iterations=a["iterations"], restarts=a["restarts"], loss=a.get("loss", "mean"), alpha_rel=a["alpha_relative"],
             eps_range=a["epsilon_range_fraction"], protected=a["protect_actuators"],
             modifiable=a.get("modifiable", "window" if a["gradient"] not in ("blind",) and s["defense"]["t_star"] > 0 else "detector"),
             modifiable_rows=a.get("modifiable_rows", ""), random_start=a.get("random_start", True),
@@ -92,12 +92,14 @@ def main():
                   f"+-{fmt(r['final_f1_std'])} recall {fmt(r['final_recall'])} FPR {fmt(r['final_fpr'])}")
         print(f"== {root}: attacks")
         for r in sorted(att, key=lambda r: (r["model"], r["goal"], r["modifiable"], r["eps_range"], r["t_star"],
-                                            r["attacker"], r["alpha_rel"], r["iterations"], r["eot"])):
+                                            r["attacker"], r["alpha_rel"], r["iterations"], r["eot"], r["loss"], r["sampler"])):
             extra = (f" DR_E {fmt(r['dr_E'])}+-{fmt(r['dr_E_std'])} ASR {fmt(r['asr'])}"
                      if r["goal"] == "evasion" else "")
             print(f"  {r['model'][:22]:<22} {r['goal']:<11} eps={r['eps_range']:<5} rows={r['modifiable'][:3]} "
                   f"a={r['alpha_rel']:<5} it={r['iterations']:<3} n={r['targets']:<4} "
-                  f"{'' if r['protected'] else 'actFREE '}{'' if r['random_start'] else 'noRS '}t*={r['t_star']:>4} "
+                  f"{'' if r['protected'] else 'actFREE '}{'' if r['random_start'] else 'noRS '}"
+                  f"{'' if r['loss'] == 'mean' else 'loss=' + r['loss'] + ' '}{'' if r['restarts'] == 1 else 'R=' + str(r['restarts']) + ' '}"
+                  f"{'' if r['sampler'] == 'ddpm' else r['sampler'] + ' '}t*={r['t_star']:>4} "
                   f"K={r['steps']:>3} {r['attacker']:<9}(K={r['attacker_steps']},EOT={r['eot']}) "
                   f"flagged {fmt(r['clean_flagged'])} -> {fmt(r['adv_flagged'])}+-{fmt(r['adv_flagged_std'])}"
                   f"{extra} [{r['split']}, {r['minutes']} min{', STOPPED EARLY' if r['stopped_early'] else ''}]")
