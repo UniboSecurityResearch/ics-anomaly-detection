@@ -77,6 +77,9 @@ def add_attack_args(ap):
     ap.add_argument("--trace-every", type=int, default=10)
     ap.add_argument("--attack-batch", type=int, default=128,
                     help="windows per gradient batch (GPU memory grows linearly with it)")
+    ap.add_argument("--require-reproduction", default=None, metavar="CALIBRATION_JSON",
+                    help="the t* = 0 calibration record of this detector (tstar0000_k000_*.json): "
+                         "refuse to attack (exit 3) unless it reproduced the stored detector")
     ap.add_argument("--max-minutes", type=float, default=600.0,
                     help="stop the PGD loop after this wall time and evaluate the point reached "
                          "(the job limit is 12 h); recorded as stopped_early")
@@ -108,8 +111,28 @@ class DefendedDetector:
         return det[local_targets - self.first].astype(bool)
 
 
+def reproduction_ok(path) -> tuple:
+    """(ok, message) for a t* = 0 calibration record written by `calibrate`."""
+    try:
+        with open(path) as fd:
+            rec = json.load(fd)
+    except (OSError, ValueError) as e:
+        return False, f"{path}: cannot read the t*=0 calibration record ({e})"
+    if int(rec.get("purifier", {}).get("t_star", -1)) != 0 or "reproduces_stored" not in rec:
+        return False, f"{path}: not a t*=0 calibration record"
+    if not rec["reproduces_stored"]:
+        return False, f"{path}: t*=0 did NOT reproduce the stored detector"
+    return True, f"{path}: t*=0 reproduces the stored detector"
+
+
 def run_attack(args) -> int:
     started = time.time()
+    if args.require_reproduction:
+        ok, msg = reproduction_ok(args.require_reproduction)
+        print(msg, flush=True)
+        if not ok:
+            print("ERROR: attack refused (the defended and undefended arms would not be comparable)")
+            return 3
     with open(args.defense) as fd:
         dfn = json.load(fd)
     out = Path(args.out)

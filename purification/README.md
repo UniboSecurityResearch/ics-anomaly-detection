@@ -144,8 +144,38 @@ defense.
    small steps (with steps of 10% of the range and a random start over the whole
    range, sign-PGD failed even on the undefended detector: 0% evasion; from the clean
    series with 1% steps: 96% on the development AE), and two more step sizes.
-2. phase 2 (all detectors, **final** split): undefended vs defended under the
-   attacks chosen in phase 1.
+2. `purification_phase2.sh` (all 18 detectors, **final** split, 512 targets per
+   attack, the phase-1b threat model): undefended vs defended under the attacks chosen
+   in phase 1b, queued as one calibration array and one attack array in order of
+   priority (main budget for every detector, other budgets, attacker variants on
+   seed 7, the `t*` curve for AE seed 7, convergence and diagnostics); `--plan`
+   writes and counts the tasks without queueing. Every attack refuses to run (exit
+   3) if its detector's `t* = 0` calibration did not reproduce the stored detector
+   (`--require-reproduction`).
+
+### Outcome of phase 1b (AE seed 7, tuning split, 512 targets)
+
+* All 61 attacks completed. Whole-range check from the clean series (step 0.01,
+  actuators free): the undefended detector drops from 0.553 to 0.174 of the targets
+  flagged (ASR 0.69): the attack machinery works (it gave 0 in phase 1_v2), though
+  sign-PGD is no oracle at that budget.
+* Convergence at budget 0.05: steps 0.025 (500 it.), 0.10 and 0.25 agree within
+  0.3 points at `t* = 0` and 20 and within 1.1 points at `t* = 50`; EOT 1 / 20 / 40
+  and 200 / 500 iterations agree within 0.7 points; full gradient ~ surrogate >
+  BPDA >= blind, as expected.
+* Rule 1 admits `t* <= 50`. Rule 2 (worst-case share of targets still flagged under
+  evasion at budget 0.05): `t* = 0` 0.480; 5 0.408; 10 0.361; 20 0.356; 30 0.356;
+  50 0.375. **No `t* > 0` improves evasion robustness: negative result.** Even
+  without any attack the defended detector flags fewer targets (0.41-0.42 at
+  `t* >= 20`) than the undefended one under attack. Among `t* > 0` the rule picks
+  `t* = 5`. Rule 3 gives EOT 1 (within 1 point of EOT 40) and 200 iterations.
+* False alarm at budget 0.05 does improve: 0.443 undefended, 0.164 at `t* = 5`,
+  about 0.01 at `t* = 20-30`, 0.033 at `t* = 50`; at budget 0.10 the gain mostly
+  disappears (0.441 at `t* = 20`, 0.310 at `t* = 50`, 0.737 at `t* = 10`).
+* Budget-insensitive floors (`t* = 0`: 0.4805 flagged and 0.4434 false alarms at both
+  0.05 and 0.10) suggest structural limits of the threat model (protected actuators;
+  a false alarm needs `w` consecutive scores above `theta`, which bounds it by the
+  geometry of the target blocks). Phase 2 P6 checks the first with actuators free.
 
 Evasion comparisons across `t*` use the detection rate over ALL attack targets
 after the attack (`flagged`), not only over E: E is the set each detector flags on

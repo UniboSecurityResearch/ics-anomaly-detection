@@ -91,11 +91,13 @@ def main():
                   f"w={r['window']:>3} | tune F1 {fmt(r['tune_f1'])} | final F1 {fmt(r['final_f1'])}"
                   f"+-{fmt(r['final_f1_std'])} recall {fmt(r['final_recall'])} FPR {fmt(r['final_fpr'])}")
         print(f"== {root}: attacks")
-        for r in sorted(att, key=lambda r: (r["model"], r["goal"], r["modifiable"], r["eps_range"], r["t_star"], r["attacker"])):
+        for r in sorted(att, key=lambda r: (r["model"], r["goal"], r["modifiable"], r["eps_range"], r["t_star"],
+                                            r["attacker"], r["alpha_rel"], r["iterations"], r["eot"])):
             extra = (f" DR_E {fmt(r['dr_E'])}+-{fmt(r['dr_E_std'])} ASR {fmt(r['asr'])}"
                      if r["goal"] == "evasion" else "")
             print(f"  {r['model'][:22]:<22} {r['goal']:<11} eps={r['eps_range']:<5} rows={r['modifiable'][:3]} "
-                  f"a={r['alpha_rel']:<5} {'' if r['random_start'] else 'noRS '}t*={r['t_star']:>4} "
+                  f"a={r['alpha_rel']:<5} it={r['iterations']:<3} n={r['targets']:<4} "
+                  f"{'' if r['protected'] else 'actFREE '}{'' if r['random_start'] else 'noRS '}t*={r['t_star']:>4} "
                   f"K={r['steps']:>3} {r['attacker']:<9}(K={r['attacker_steps']},EOT={r['eot']}) "
                   f"flagged {fmt(r['clean_flagged'])} -> {fmt(r['adv_flagged'])}+-{fmt(r['adv_flagged_std'])}"
                   f"{extra} [{r['split']}, {r['minutes']} min{', STOPPED EARLY' if r['stopped_early'] else ''}]")
