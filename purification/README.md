@@ -163,6 +163,9 @@ attack folder (targets, E, per-target detection rates, scores of the scored
 timesteps clean and attacked, which of them were modifiable) and
 `purification_per_target.py` (decision geometry, per-block results, 95% bootstrap
 intervals over blocks, paired differences between arms).
+`purification.check_tasks` parses every task line with `main_purification.py`'s own
+argument parser before anything is queued (the launcher runs it when TensorFlow is
+importable; it always checks that `--out` equals the task folder).
 
 ### Outcome of phase 1b (AE seed 7, tuning split, 512 targets)
 

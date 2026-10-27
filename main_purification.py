@@ -54,7 +54,7 @@ def add_common(ap):
     ap.add_argument("--seed", type=int, default=0)
 
 
-def parse_args():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     cal = sub.add_parser("calibrate")
@@ -68,7 +68,7 @@ def parse_args():
     add_common(att)
     from purification.attack import add_attack_args
     add_attack_args(att)
-    return ap.parse_args()
+    return ap.parse_args(argv)
 
 
 def resolve_lookahead(spec: str) -> int:

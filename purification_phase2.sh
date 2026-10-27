@@ -134,7 +134,7 @@ p0() {  # $1 t*, $2 budget, $3 goal, rest = extra arguments
     local T=$1 B=$2 G=$3 E=$EOT; shift 3
     (( T == 0 )) && E=1
     local O=$P2/p0_tune/range$B/t$T/full_a${ALPHA}_eot${E}_it${ITERS}$(echo "$*" | tr -d ' -')/$G
-    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$AE7 --split tune --max-targets 512 --eval-draws 10 --trace-every 10 --seed 42 --modifiable detector --protect-actuators --defense $CAL1/defense_$(tag "$T" ddpm).json --epsilon-range-fraction $B --goal $G --alpha-relative $ALPHA --iterations $ITERS --gradient full --eot $E $*" >> "$TD/p0.txt"
+    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$AE7 --split tune --max-targets 512 --eval-draws 10 --trace-every 10 --seed 42 --modifiable detector --protect-actuators --defense $CAL1/defense_$(tag "$T" ddpm).json --epsilon-range-fraction $B --goal $G --alpha-relative $ALPHA --iterations $ITERS --gradient full --eot $E $* --out $O" >> "$TD/p0.txt"
 }
 p0 0 0.05 evasion; p0 0 0.05 false_alarm; p0 0 0.02 evasion; p0 0 0.10 evasion
 p0 0 0.05 evasion --loss log
@@ -161,7 +161,7 @@ NCAL=$(wc -l < "$TD/calib.txt")
 att() {
     local RUN=$1 CAL=$2 SM=$3 T=$4 B=$5 G=$6 L=$7; shift 7
     local O=$P2/$RUN/range$B/t$T/$L/$G
-    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$RUN --split final --max-targets $TARGETS --eval-draws 10 --trace-every 10 --seed 42 --defense $CAL/defense_$(tag "$T" "$SM").json --require-reproduction $CAL/$(tag 0 "$SM").json --epsilon-range-fraction $B --goal $G $*" >> "$TD/attacks.txt"
+    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$RUN --split final --max-targets $TARGETS --eval-draws 10 --trace-every 10 --seed 42 --defense $CAL/defense_$(tag "$T" "$SM").json --require-reproduction $CAL/$(tag 0 "$SM").json --epsilon-range-fraction $B --goal $G $* --out $O" >> "$TD/attacks.txt"
 }
 THREAT="--protect-actuators --modifiable $MODIFIABLE"
 std() {  # <run> <t*> <budget> <goal> [label prefix] [calib folder] [sampler] [extra...]: the P1 attack
@@ -252,6 +252,17 @@ for B in "${BUD[@]:1}"; do for RUN in "${RUNS[@]}"; do arms "$RUN" "$B"; done; d
 block "P7_other_budgets_all18"
 
 N=$(wc -l < "$TD/attacks.txt")
+# every task must write where the worker expects it (first field = --out), and every
+# line must be accepted by main_purification.py's argument parser
+for F in p0 calib attacks; do
+    BAD=$(awk '{ ok = 0; for (i = 2; i < NF; i++) if ($i == "--out" && $(i + 1) == $1) ok = 1; if (!ok) print NR }' "$TD/$F.txt" | head -3)
+    if [[ -n "$BAD" ]]; then echo "ERROR: $F.txt lines $BAD lack --out <their folder>"; exit 1; fi
+done
+if command -v python3 > /dev/null && python3 -c "import tensorflow" 2> /dev/null; then
+    python3 -m purification.check_tasks "$TD/p0.txt" "$TD/calib.txt" "$TD/attacks.txt" || exit 1
+else
+    echo "note: no TensorFlow here, task arguments not parsed (the --out check passed)"
+fi
 for F in p0 attacks; do
     if [[ $(awk '{print $1}' "$TD/$F.txt" | sort | uniq -d | wc -l) -ne 0 ]]; then
         echo "ERROR: duplicate output folders in $F"; awk '{print $1}' "$TD/$F.txt" | sort | uniq -d | head; exit 1
