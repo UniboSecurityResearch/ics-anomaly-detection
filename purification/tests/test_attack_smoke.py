@@ -22,6 +22,19 @@ from purification.denoiser import UNet1D
 from purification.purifier import Purifier
 
 D, N_TRAIN, N_TEST, TUNE = 6, 600, 900, 450
+STORED = dict(best_window=5, threshold_percentile=0.99, best_theta=0.5, final_f1=0.8)
+
+
+def t0_record(path, **change):
+    sel = dict(window=5, percentile=0.99, theta=0.5, final=dict(f1=0.8))
+    for k, v in change.items():
+        if k == "f1":
+            sel["final"]["f1"] = v
+        else:
+            sel[k] = v
+    with open(path, "w") as fd:
+        json.dump(dict(model_dir="toy", purifier=dict(t_star=0), selection=sel, reproduces_stored=False), fd)
+    return path
 
 
 def fake_world():
@@ -47,6 +60,7 @@ def install(world, tmp):
     A.load_data = lambda ds: (x_train, x_test, y, cols)
     A.load_detector = lambda d: (ae, "AE", None, {}, "AE-toy")
     A.actuator_indices = lambda c: [5]
+    A.load_params = lambda d: STORED
 
     def splits(ds, xtr, xte, yte, geom):
         first = geom.first_target
@@ -76,6 +90,7 @@ def run(tmp, name, **kw):
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--dataset", default="SWAT-CLEAN")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--model-dir", default="toy")
     argv = []
     for k, v in kw.items():
         k = "--" + k.replace("_", "-")
@@ -111,15 +126,30 @@ def main():
             os.makedirs(keep, exist_ok=True)
             tmp = keep
         install(world, tmp)
-        rec_ok = os.path.join(tmp, "t0_ok.json")
-        rec_bad = os.path.join(tmp, "t0_bad.json")
-        json.dump(dict(purifier=dict(t_star=0), reproduces_stored=True), open(rec_ok, "w"))
-        json.dump(dict(purifier=dict(t_star=0), reproduces_stored=False), open(rec_bad, "w"))
+        # the guard is recomputed from the record's selection (the saved boolean is ignored):
+        # theta within 2e-3 relative passes (phase 2: up to 8.5e-4 from GPU numerics),
+        # anything else refuses
+        rec_ok = t0_record(os.path.join(tmp, "t0_ok.json"), theta=0.5 * (1 + 8.5e-4), f1=0.80001)
+        bad = dict(theta=t0_record(os.path.join(tmp, "t0_theta.json"), theta=0.5 * (1 + 5e-3)),
+                   window=t0_record(os.path.join(tmp, "t0_w.json"), window=10),
+                   f1=t0_record(os.path.join(tmp, "t0_f1.json"), f1=0.79))
         common = dict(split="final", max_targets=60, epsilon_range_fraction=0.3, protect_actuators=True,
                       iterations=6, eval_draws=2, trace_every=3, attack_batch=16, require_reproduction=rec_ok)
-        status, _ = run(tmp, "refused", defense=defense(tmp, 0), goal="evasion", eot=1,
-                        **dict(common, require_reproduction=rec_bad))
-        assert status == 3, "the attack must refuse a detector that was not reproduced"
+        for why, rec in bad.items():
+            status, _ = run(tmp, "refused_" + why, defense=defense(tmp, 0), goal="evasion", eot=1,
+                            **dict(common, require_reproduction=rec))
+            assert status == 3, f"the attack must refuse a detector not reproduced ({why})"
+        # one block of 32 rows from the middle of every run: the toy final split has one
+        # attack (rows 150-229 of the split) and two normal stretches
+        status, out = run(tmp, "blocks_ev", defense=defense(tmp, 0), goal="evasion", eot=1,
+                          **dict(common, block_length=32))
+        p, s = check_per_target(out)
+        assert status == 0 and p["targets"] == list(range(174, 206)) and s["attacker"]["n_blocks"] == 1
+        status, out = run(tmp, "blocks_fa", defense=defense(tmp, 0), goal="false_alarm", eot=1,
+                          **dict(common, block_length=32))
+        p, s = check_per_target(out)
+        assert status == 0 and len(p["targets"]) == 64 and s["attacker"]["n_blocks"] == 2
+        print("guard and block-length checks passed")
         cases = [
             ("undef_ev", dict(defense=defense(tmp, 0), goal="evasion", eot=1)),
             ("undef_fa", dict(defense=defense(tmp, 0), goal="false_alarm", eot=1)),

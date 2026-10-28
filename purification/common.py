@@ -37,6 +37,16 @@ def git_state() -> dict:
                 dirty=bool(run("git", "status", "--porcelain", "--untracked-files=no")))
 
 
+def load_params(model_dir: str):
+    """The stored training record (<model>.json) of a detector, without loading the model."""
+    jsons = sorted(glob.glob(os.path.join(model_dir, "*.json")))
+    jsons = [j for j in jsons if not os.path.basename(j).startswith(("defense", "calib"))]
+    if len(jsons) != 1:
+        raise SystemExit(f"{model_dir}: expected exactly one model .json, found {jsons}")
+    with open(jsons[0]) as fd:
+        return json.load(fd)
+
+
 def load_detector(model_dir: str):
     jsons = sorted(glob.glob(os.path.join(model_dir, "*.json")))
     jsons = [j for j in jsons if not os.path.basename(j).startswith(("defense", "calib"))]

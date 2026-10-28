@@ -75,7 +75,13 @@ def describe(run, p, n_boot, rng):
     adv = p["adv_flag_rate"] > 0.5
     print(f"  flagged (majority of draws): clean {clean.mean():.4f}, after the attack {adv.mean():.4f}"
           f" (mean rates {p['clean_flag_rate'].mean():.4f} -> {p['adv_flag_rate'].mean():.4f})")
-    byb = {b: p["adv_flag_rate"][p["blocks"] == b] for b in np.unique(p["blocks"])}
+    ub = np.unique(p["blocks"])
+    ep_c = np.mean([clean[p["blocks"] == b].any() for b in ub])
+    ep_a = np.mean([adv[p["blocks"] == b].any() for b in ub])
+    print(f"  ceiling of the share flagged (targets whose window lies inside their block): {inside.mean():.4f}")
+    print(f"  blocks with at least one target flagged (episode level): clean {ep_c:.4f}, after the attack {ep_a:.4f} "
+          f"({len(ub)} blocks)")
+    byb = {b: p["adv_flag_rate"][p["blocks"] == b] for b in ub}
     lo, hi = boot_ci(byb, n_boot, rng)
     print(f"  share flagged after the attack: {p['adv_flag_rate'].mean():.4f}, 95% interval over blocks [{lo:.4f}, {hi:.4f}]")
     print("  block  first_target  n   clean  attacked")

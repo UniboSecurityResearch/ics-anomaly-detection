@@ -126,7 +126,15 @@ def grid_search(val_scores, tune_scores, tune_labels, final_scores, final_labels
                 tune=tune, final=final)
 
 
-def check_reproduction(result: dict, stored: dict, f1_tol: float = 1e-3, theta_rtol: float = 1e-4) -> Tuple[bool, str]:
+# theta is a quantile of float32 network scores recomputed on the GPU: cuDNN kernels
+# are not bit-reproducible across runs/batch sizes, which moves the quantile of some
+# CNN/DNN/LSTM detectors by up to ~1e-3 (relative; phase 2: 8.5e-4 at most) while the
+# decisions do not change (final F1 equal within 2e-5). Percentile and window must be
+# identical and the final F1 within f1_tol, so a real bug cannot pass this check.
+THETA_RTOL = 2e-3
+
+
+def check_reproduction(result: dict, stored: dict, f1_tol: float = 1e-3, theta_rtol: float = THETA_RTOL) -> Tuple[bool, str]:
     ok = (result["window"] == stored.get("best_window")
           and np.isclose(result["percentile"], stored.get("threshold_percentile", np.nan))
           and np.isclose(result["theta"], stored.get("best_theta"), rtol=theta_rtol, atol=0)

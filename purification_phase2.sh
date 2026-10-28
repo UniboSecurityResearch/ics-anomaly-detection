@@ -11,9 +11,16 @@
 #   T_STARS="<t* ...>" STEPS=<K> EOT=<samples> ITERS=<PGD iterations> \
 #   ALPHA=<step / budget> MODIFIABLE=<detector|window> bash purification_phase2.sh
 #   ... bash purification_phase2.sh --plan     # writes and counts the tasks, queues nothing
+#   ... bash purification_phase2.sh --requeue-attacks   # after the calibrations: cancel the
+#        queued attack array, rewrite tasks/attacks.txt with this version of the script
+#        (the old file is kept as attacks.txt.v<N>) and queue it again (not on hold)
 #   bash purification_phase2.sh --report       # any time: tables of what has finished + archive
-# Optional: BUDGETS (default "0.05 0.10 0.02"; the FIRST is the main budget), TARGETS
-# (default 512, as in phase 1), BIG_TARGETS (default 2048, sample-size check),
+# Optional: BUDGETS (default "0.05 0.10 0.02"; the FIRST is the main budget), BLOCK
+# (default 64: the targets of every attack are one block of BLOCK consecutive rows from
+# the middle of EVERY run of the requested kind -- every attack for evasion, every normal
+# stretch for false alarm -- so that every block is longer than the longest detection
+# window, w <= 30; 0 = the phase-1 sampling of TARGETS rows spread over the runs),
+# TARGETS (default 512, only with BLOCK=0), BIG_BLOCK (default 128, the P6 check),
 # CURVE_T_STARS (default "5 10 20 30 50 100 200", AE seed 7 only), HOLD (default 1:
 # the attack array is queued on hold, see P0), CONTEXT, LOOKAHEAD.
 #
@@ -33,16 +40,16 @@
 #   P1  main budget, all 18 detectors: undefended (t* = 0) and adaptive (full gradient
 #       + EOT) at every T_STARS, evasion and false alarm                -> A, B
 #   P2  attack strength, seed 7, every architecture, main budget: surrogate (K/2
-#       steps), BPDA, blind, EOT 1, log-score loss (also at t* = 0), 3 random restarts
-#       (t* = 0 and max T_STARS)                                        -> D
+#       steps), BPDA, blind, EOT 1 (and EOT 20 when EOT < 20), log-score loss (also at
+#       t* = 0), 3 random restarts (t* = 0 and max T_STARS)              -> D
 #   P3  mechanism and ablations, AE seed 7, main budget: actuators free; the stronger
 #       attacker (MODIFIABLE=window); noise-only ablation; causal purifier; whole range
 #       from the clean series at t* = 0 for every seed-7 architecture
 #   P4  t* curve, AE seed 7, main budget, CURVE_T_STARS not in T_STARS  -> C
 #   P5  convergence, seed 7, every architecture: step 0.025 x 500 it. at t* = 0 and
 #       max(T_STARS), evasion                                           -> D
-#   P6  sample size, AE seed 7: BIG_TARGETS targets (longer blocks, so the false-alarm
-#       ceiling set by the block geometry is higher) at t* = 0 and max(T_STARS)
+#   P6  block length, AE seed 7: blocks of BIG_BLOCK rows at t* = 0 and max(T_STARS)
+#       (do the conclusions depend on the block length?)
 #   P7  the other budgets, all 18 detectors, same arms as P1           -> B (budget curve)
 set -euo pipefail
 REPO="${REPO:-/scratch.hpc/dhyana.schirra/tesi/ics-anomaly-detection}"
@@ -69,7 +76,7 @@ if [[ "$MODE" == "--report" ]]; then
     echo "== archive: $HOME/purification_phase2.tgz ($(du -h "$HOME/purification_phase2.tgz" | cut -f1))"
     exit 0
 fi
-if [[ "$MODE" != "queue" && "$MODE" != "--plan" ]]; then echo "usage: see the header"; exit 1; fi
+if [[ "$MODE" != "queue" && "$MODE" != "--plan" && "$MODE" != "--requeue-attacks" ]]; then echo "usage: see the header"; exit 1; fi
 
 : "${T_STARS:?set T_STARS (chosen in phase 1b), e.g. \"5 20 50\"}"
 : "${STEPS:?set STEPS (chosen in phase 1)}"
@@ -79,7 +86,9 @@ if [[ "$MODE" != "queue" && "$MODE" != "--plan" ]]; then echo "usage: see the he
 : "${MODIFIABLE:?set MODIFIABLE (detector = the phase-1b threat model)}"
 BUDGETS="${BUDGETS:-0.05 0.10 0.02}"
 TARGETS="${TARGETS:-512}"
-BIG_TARGETS="${BIG_TARGETS:-2048}"
+BLOCK="${BLOCK:-64}"
+BIG_BLOCK="${BIG_BLOCK:-128}"
+if (( BLOCK > 0 )); then SAMPLING="--block-length $BLOCK"; else SAMPLING="--max-targets $TARGETS"; fi
 CURVE_T_STARS="${CURVE_T_STARS:-5 10 20 30 50 100 200}"
 HOLD="${HOLD:-1}"
 CONTEXT="${CONTEXT:-128}"
@@ -102,7 +111,7 @@ kof() {  # $1 t*, $2 sampler: denoising steps of the purifier (as calibrate name
 }
 tag() { printf "tstar%04d_k%03d_%s" "$1" "$(kof "$1" "$2")" "$2"; }   # $1 t*, $2 sampler
 
-if [[ "$MODE" == "queue" ]]; then
+if [[ "$MODE" == "queue" || "$MODE" == "--requeue-attacks" ]]; then
     git fetch -q origin
     if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
         echo "ERROR: HEAD is not origin/main. Pull (or push) first."; exit 1
@@ -119,9 +128,21 @@ if [[ "$MODE" == "queue" ]]; then
         F="$CAL1/defense_$(tag $T ddpm).json"
         if [[ ! -f "$F" ]]; then echo "ERROR: missing $F (phase 1_v2 calibration, used by p0)"; exit 1; fi
     done
-    if [[ -n "$(squeue -u "$USER" -h)" ]]; then echo "ERROR: you still have jobs in the queue."; exit 1; fi
-    if [[ -e "$P2/jobs.txt" ]]; then echo "ERROR: $P2/jobs.txt exists: phase 2 was already queued."; exit 1; fi
     TD=$P2/tasks
+    if [[ "$MODE" == "queue" ]]; then
+        if [[ -n "$(squeue -u "$USER" -h)" ]]; then echo "ERROR: you still have jobs in the queue."; exit 1; fi
+        if [[ -e "$P2/jobs.txt" ]]; then echo "ERROR: $P2/jobs.txt exists: phase 2 was already queued."; exit 1; fi
+    else
+        if [[ ! -f "$P2/jobs.txt" ]]; then echo "ERROR: nothing queued yet: use the normal launch"; exit 1; fi
+        OLDA=$(awk '$1 ~ /^attacks/ {id = $2} END {print id}' "$P2/jobs.txt")
+        CALJ=$(awk '$1 == "calib" {print $2}' "$P2/jobs.txt")
+        if [[ -n "$(squeue -h -j "$CALJ" 2> /dev/null)" ]]; then echo "ERROR: the calibrations ($CALJ) are still in the queue"; exit 1; fi
+        if [[ -n "$(squeue -h -j "$OLDA" -t RUNNING 2> /dev/null)" ]]; then echo "ERROR: attacks of job $OLDA are running: not requeued"; exit 1; fi
+        V=1; while [[ -e "$TD/attacks.txt.v$V" ]]; do V=$((V + 1)); done
+        cp "$TD/attacks.txt" "$TD/attacks.txt.v$V"
+        cp "$TD/calib.txt" "$TD/calib.txt.before_requeue"
+        cp "$TD/p0.txt" "$TD/p0.txt.before_requeue"
+    fi
 else
     TD=$P2/plan
     rm -rf "$TD"
@@ -130,11 +151,11 @@ mkdir -p "$TD"
 
 # ---- p0: diagnostic on the tuning split (phase-1_v2 defenses, as phase 1b) ---------------
 : > "$TD/p0.txt"
-p0() {  # $1 t*, $2 budget, $3 goal, rest = extra arguments
-    local T=$1 B=$2 G=$3 E=$EOT; shift 3
+p0() {  # $1 t*, $2 budget, $3 goal, rest = extra arguments; the phase-1b attack settings
+    local T=$1 B=$2 G=$3 E=20 A1=0.10 I1=200; shift 3
     (( T == 0 )) && E=1
-    local O=$P2/p0_tune/range$B/t$T/full_a${ALPHA}_eot${E}_it${ITERS}$(echo "$*" | tr -d ' -')/$G
-    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$AE7 --split tune --max-targets 512 --eval-draws 10 --trace-every 10 --seed 42 --modifiable detector --protect-actuators --defense $CAL1/defense_$(tag "$T" ddpm).json --epsilon-range-fraction $B --goal $G --alpha-relative $ALPHA --iterations $ITERS --gradient full --eot $E $* --out $O" >> "$TD/p0.txt"
+    local O=$P2/p0_tune/range$B/t$T/full_a${A1}_eot${E}_it${I1}$(echo "$*" | tr -d ' -')/$G
+    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$AE7 --split tune --max-targets 512 --eval-draws 10 --trace-every 10 --seed 42 --modifiable detector --protect-actuators --defense $CAL1/defense_$(tag "$T" ddpm).json --epsilon-range-fraction $B --goal $G --alpha-relative $A1 --iterations $I1 --gradient full --eot $E $* --out $O" >> "$TD/p0.txt"
 }
 p0 0 0.05 evasion; p0 0 0.05 false_alarm; p0 0 0.02 evasion; p0 0 0.10 evasion
 p0 0 0.05 evasion --loss log
@@ -161,7 +182,7 @@ NCAL=$(wc -l < "$TD/calib.txt")
 att() {
     local RUN=$1 CAL=$2 SM=$3 T=$4 B=$5 G=$6 L=$7; shift 7
     local O=$P2/$RUN/range$B/t$T/$L/$G
-    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$RUN --split final --max-targets $TARGETS --eval-draws 10 --trace-every 10 --seed 42 --defense $CAL/defense_$(tag "$T" "$SM").json --require-reproduction $CAL/$(tag 0 "$SM").json --epsilon-range-fraction $B --goal $G $* --out $O" >> "$TD/attacks.txt"
+    echo "$O main_purification.py attack --dataset SWAT-CLEAN --model-dir models/$RUN --split final $SAMPLING --eval-draws 10 --trace-every 10 --seed 42 --defense $CAL/defense_$(tag "$T" "$SM").json --require-reproduction $CAL/$(tag 0 "$SM").json --epsilon-range-fraction $B --goal $G $* --out $O" >> "$TD/attacks.txt"
 }
 THREAT="--protect-actuators --modifiable $MODIFIABLE"
 std() {  # <run> <t*> <budget> <goal> [label prefix] [calib folder] [sampler] [extra...]: the P1 attack
@@ -200,6 +221,12 @@ for RUN in "${S7[@]}"; do
         done
         if (( EOT != 1 )); then
             att "$RUN" "$C" ddpm "$T" "$MAIN" evasion "full_a${ALPHA}_eot1_it${ITERS}" $S --gradient full --eot 1
+        fi
+        if (( EOT < 20 )); then   # EOT saturation checked against EOT 20 on the final split too
+            att "$RUN" "$C" ddpm "$T" "$MAIN" evasion "full_a${ALPHA}_eot20_it${ITERS}" $S --gradient full --eot 20
+            if (( T == TMAX )); then
+                att "$RUN" "$C" ddpm "$T" "$MAIN" false_alarm "full_a${ALPHA}_eot20_it${ITERS}" $S --gradient full --eot 20
+            fi
         fi
         for G in evasion false_alarm; do
             att "$RUN" "$C" ddpm "$T" "$MAIN" $G "full_a${ALPHA}_eot${EOT}_it${ITERS}_log" $S --gradient full --eot "$EOT" --loss log
@@ -242,11 +269,11 @@ block "P5_convergence_seed7"
 # P6
 for T in 0 "$TMAX"; do
     for G in evasion false_alarm; do
-        std $AE7 "$T" "$MAIN" $G "n${BIG_TARGETS}_" "$P2/$AE7/calib" ddpm
-        sed -i '$ s/--max-targets '"$TARGETS"' /--max-targets '"$BIG_TARGETS"' /' "$TD/attacks.txt"
+        std $AE7 "$T" "$MAIN" $G "blk${BIG_BLOCK}_" "$P2/$AE7/calib" ddpm
+        sed -i '$ s/ '"$SAMPLING"' / --block-length '"$BIG_BLOCK"' /' "$TD/attacks.txt"
     done
 done
-block "P6_sample_size_ae_s7"
+block "P6_block_length_ae_s7"
 # P7
 for B in "${BUD[@]:1}"; do for RUN in "${RUNS[@]}"; do arms "$RUN" "$B"; done; done
 block "P7_other_budgets_all18"
@@ -268,11 +295,27 @@ for F in p0 attacks; do
         echo "ERROR: duplicate output folders in $F"; awk '{print $1}' "$TD/$F.txt" | sort | uniq -d | head; exit 1
     fi
 done
-CFG="T_STARS=$T_STARS STEPS=$STEPS EOT=$EOT ITERS=$ITERS ALPHA=$ALPHA MODIFIABLE=$MODIFIABLE BUDGETS=$BUDGETS TARGETS=$TARGETS BIG_TARGETS=$BIG_TARGETS CURVE_T_STARS=$CURVE_T_STARS CONTEXT=$CONTEXT LOOKAHEAD=$LOOKAHEAD"
+CFG="T_STARS=$T_STARS STEPS=$STEPS EOT=$EOT ITERS=$ITERS ALPHA=$ALPHA MODIFIABLE=$MODIFIABLE BUDGETS=$BUDGETS BLOCK=$BLOCK TARGETS=$TARGETS BIG_BLOCK=$BIG_BLOCK CURVE_T_STARS=$CURVE_T_STARS CONTEXT=$CONTEXT LOOKAHEAD=$LOOKAHEAD"
 echo "$CFG"
 echo "p0: $(wc -l < "$TD/p0.txt") diagnostic attacks; $NCAL calibrations; $N attacks; priority blocks (attack array task indices):"
 sed 's/^/  /' "$TD/priorities.txt"
 if [[ "$MODE" == "--plan" ]]; then echo "plan only, nothing queued; task files in $TD"; exit 0; fi
+if [[ "$MODE" == "--requeue-attacks" ]]; then
+    for F in calib p0; do
+        if ! cmp -s "$TD/$F.txt" "$TD/$F.txt.before_requeue"; then
+            cp "$TD/$F.txt.before_requeue" "$TD/$F.txt"; cp "$TD/attacks.txt.v$V" "$TD/attacks.txt"
+            echo "ERROR: with these settings $F.txt would change (different T_STARS/STEPS/...?): nothing done"; exit 1
+        fi
+    done
+    echo "requeue v$V, commit $(git rev-parse --short HEAD), $(date -Is); $CFG" >> "$P2/commit.txt"
+    scancel "$OLDA" && echo "cancelled the previous attack array $OLDA (task file kept as attacks.txt.v$V)"
+    A=$(sbatch --parsable --array=0-$((N - 1))%3 --time=12:00:00 --mail-type=END,FAIL \
+        --export=ALL,TASKS="$REPO/$TD/attacks.txt" purification.sbatch); A="${A%%;*}"
+    echo "attacks_v$((V + 1)) $A" >> "$P2/jobs.txt"
+    echo "Queued $N attacks (job $A). Report (also while running): bash purification_phase2.sh --report"
+    echo "To drop a priority block later: scancel ${A}_[<first>-<last>] with the indices above."
+    exit 0
+fi
 
 echo "commit $(git rev-parse --short HEAD), $(date -Is); $CFG HOLD=$HOLD" > "$P2/commit.txt"
 sub() { local id; id=$(sbatch --parsable "$@"); echo "${id%%;*}"; }

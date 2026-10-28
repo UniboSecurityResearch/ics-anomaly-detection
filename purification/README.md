@@ -163,6 +163,27 @@ attack folder (targets, E, per-target detection rates, scores of the scored
 timesteps clean and attacked, which of them were modifiable) and
 `purification_per_target.py` (decision geometry, per-block results, 95% bootstrap
 intervals over blocks, paired differences between arms).
+Target geometry (found with the phase-2 `p0` records). A row is flagged only if all
+`w` scores of its centred window exceed `theta`, so a block of `L` target rows can have
+at most `L - w + 1` rows flagged in a false-alarm attack, and the evasion numbers are set
+block by block: in `p0` every tuning block is flagged entirely or not at all, and the
+undefended attack at budget 0.05 removes exactly one block (attack 7, LIT301) of 14. The
+phase-1 sampling (512 rows spread over the runs) gives blocks of 26-29 rows on the
+final split, i.e. a false-alarm ceiling of 0.67 / 0.30 / 0.00 for `w` = 10 / 20 / 30,
+which also differs between arms whose recalibrated `w` differs (phase 1b: 0.737 at
+`t* = 10`, `w = 10`, against 0.443 undefended, `w = 20`, are both their ceilings). Phase
+2 therefore uses `--block-length 64`: one block of 64 rows from the middle of every
+attack (18 on the final split) and of every normal stretch (19); every run there is at
+least 75 rows long and 64 > 30 = the largest `w`. Results are reported per row (with
+each arm's ceiling) and per block (blocks with at least one row flagged), with
+intervals over blocks, the independent units.
+
+Reproduction check: percentile and window identical, final F1 within 1e-3, `theta`
+within 2e-3 relative (it is a quantile of float32 GPU scores: cnn s7/s21, dnn s42 and
+lstm s42 moved by 1.3e-4 to 8.5e-4 with the final F1 equal within 1.4e-4). The attack
+guard recomputes the check from the calibration record, so records written with the
+earlier 1e-4 tolerance are judged by the current rule.
+
 `purification.check_tasks` parses every task line with `main_purification.py`'s own
 argument parser before anything is queued (the launcher runs it when TensorFlow is
 importable; it always checks that `--out` equals the task folder).

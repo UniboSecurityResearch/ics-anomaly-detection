@@ -49,8 +49,8 @@ import tensorflow as tf
 
 from adversarial.detector import repo_cached_detect
 from adversarial.targets import actuator_indices, sample_segment_blocks
-from .calibration import build_splits
-from .common import git_state, load_data, load_detector, load_purifier
+from .calibration import build_splits, check_reproduction
+from .common import git_state, load_data, load_detector, load_params, load_purifier
 from .instances import Scorer, errors_tf, make_geometry, window_index
 from .purifier import Purifier, seed_pair
 
@@ -62,6 +62,12 @@ def add_attack_args(ap):
     ap.add_argument("--attack-steps", type=int, default=None, help="denoising steps of the surrogate")
     ap.add_argument("--split", choices=["tune", "final"], default="final")
     ap.add_argument("--max-targets", type=int, default=2048)
+    ap.add_argument("--block-length", type=int, default=0,
+                    help="if > 0: one block of this many consecutive rows from the middle of EVERY run "
+                         "of the requested kind (every attack, every normal stretch; a shorter run is "
+                         "taken whole); --max-targets is then ignored. Fixes the geometry: a row is "
+                         "flagged only if its whole w-row window is above theta, so blocks shorter "
+                         "than w cannot be flagged at all"),
     ap.add_argument("--epsilon-range-fraction", type=float, default=0.10)
     ap.add_argument("--protect-actuators", action="store_true")
     ap.add_argument("--alpha-relative", type=float, default=0.10)
@@ -117,24 +123,44 @@ class DefendedDetector:
         return out
 
 
-def reproduction_ok(path) -> tuple:
-    """(ok, message) for a t* = 0 calibration record written by `calibrate`."""
+def reproduction_ok(path, model_dir=None, params=None) -> tuple:
+    """(ok, message) for a t* = 0 calibration record written by `calibrate`. The check is
+    RECOMPUTED from the record's selection and the detector's stored training record with
+    the current calibration.check_reproduction (not read from the boolean saved at
+    calibration time), so records written before a tolerance change are judged by the
+    current rule."""
     try:
         with open(path) as fd:
             rec = json.load(fd)
     except (OSError, ValueError) as e:
         return False, f"{path}: cannot read the t*=0 calibration record ({e})"
-    if int(rec.get("purifier", {}).get("t_star", -1)) != 0 or "reproduces_stored" not in rec:
+    if int(rec.get("purifier", {}).get("t_star", -1)) != 0 or "selection" not in rec:
         return False, f"{path}: not a t*=0 calibration record"
-    if not rec["reproduces_stored"]:
-        return False, f"{path}: t*=0 did NOT reproduce the stored detector"
-    return True, f"{path}: t*=0 reproduces the stored detector"
+    if model_dir is not None and rec.get("model_dir") != model_dir:
+        return False, f"{path}: record of {rec.get('model_dir')}, not of {model_dir}"
+    if params is None:
+        params = load_params(rec["model_dir"])
+    ok, msg = check_reproduction(rec["selection"], params)
+    verdict = "reproduces" if ok else "does NOT reproduce"
+    return ok, f"{path}: t*=0 {verdict} the stored detector\n{msg}"
+
+
+def central_blocks(indices: np.ndarray, length: int) -> np.ndarray:
+    """One block of `length` consecutive indices from the middle of every contiguous run
+    of `indices` (a run shorter than `length` is taken whole)."""
+    runs = np.split(indices, np.flatnonzero(np.diff(indices) != 1) + 1)
+    out = []
+    for r in runs:
+        n = min(int(length), len(r))
+        start = (len(r) - n) // 2
+        out.append(r[start:start + n])
+    return np.concatenate(out).astype(indices.dtype)
 
 
 def run_attack(args) -> int:
     started = time.time()
     if args.require_reproduction:
-        ok, msg = reproduction_ok(args.require_reproduction)
+        ok, msg = reproduction_ok(args.require_reproduction, args.model_dir)
         print(msg, flush=True)
         if not ok:
             print("ERROR: attack refused (the defended and undefended arms would not be comparable)")
@@ -179,7 +205,10 @@ def run_attack(args) -> int:
     cand = local_all[np.asarray(labels_all).astype(int) == want]
     if len(cand) == 0:
         raise SystemExit("no target of the requested kind in this split")
-    targets = sample_segment_blocks(cand, args.max_targets) if 0 < args.max_targets < len(cand) else cand
+    if args.block_length > 0:
+        targets = central_blocks(cand, args.block_length)
+    else:
+        targets = sample_segment_blocks(cand, args.max_targets) if 0 < args.max_targets < len(cand) else cand
     near = det.near(targets)
     print(f"{name} | defense t*={p_def.t_star} K={p_def.n_steps} {dfn['sampler']} Lw={geom.length} "
           f"look-ahead={geom.lookahead} theta={det.theta:.6g} "
@@ -386,7 +415,9 @@ def run_attack(args) -> int:
                       protect_actuators=bool(args.protect_actuators), seed=args.seed,
                       modifiable=("window" if (args.modifiable == "window" and not p_att.identity)
                                   else "detector"),
-                      modifiable_rows=int(row_mask.sum()), random_start=not args.no_random_start),
+                      modifiable_rows=int(row_mask.sum()), random_start=not args.no_random_start,
+                      block_length=int(args.block_length),
+                      n_blocks=int(1 + np.sum(np.diff(targets) > 1))),
         n_targets=int(len(targets)), n_eligible=int(eligible.sum()), eval_draws=draws,
         stopped_early=stopped_early,
         clean=dict(per_draw=clean_draws, flagged_mean=float(clean.mean()),

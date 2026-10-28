@@ -36,7 +36,7 @@ def attack_rows(root):
             eps_range=a["epsilon_range_fraction"], protected=a["protect_actuators"],
             modifiable=a.get("modifiable", "window" if a["gradient"] not in ("blind",) and s["defense"]["t_star"] > 0 else "detector"),
             modifiable_rows=a.get("modifiable_rows", ""), random_start=a.get("random_start", True),
-            targets=s["n_targets"], eligible=s["n_eligible"], draws=s["eval_draws"],
+            targets=s["n_targets"], block=a.get("block_length", 0), blocks=a.get("n_blocks", ""), eligible=s["n_eligible"], draws=s["eval_draws"],
             clean_flagged=s["clean"]["flagged_mean"], clean_flagged_std=s["clean"]["flagged_std"],
             adv_flagged=r["flagged_mean"], adv_flagged_std=r["flagged_std"],
             dr_E=r.get("dr_E_mean", ""), dr_E_std=r.get("dr_E_std", ""), asr=r.get("asr_mean", ""),
@@ -96,7 +96,7 @@ def main():
             extra = (f" DR_E {fmt(r['dr_E'])}+-{fmt(r['dr_E_std'])} ASR {fmt(r['asr'])}"
                      if r["goal"] == "evasion" else "")
             print(f"  {r['model'][:22]:<22} {r['goal']:<11} eps={r['eps_range']:<5} rows={r['modifiable'][:3]} "
-                  f"a={r['alpha_rel']:<5} it={r['iterations']:<3} n={r['targets']:<4} "
+                  f"a={r['alpha_rel']:<5} it={r['iterations']:<3} n={r['targets']:<4}{'' if not r['block'] else '/' + str(r['blocks']) + 'x' + str(r['block'])} "
                   f"{'' if r['protected'] else 'actFREE '}{'' if r['random_start'] else 'noRS '}"
                   f"{'' if r['loss'] == 'mean' else 'loss=' + r['loss'] + ' '}{'' if r['restarts'] == 1 else 'R=' + str(r['restarts']) + ' '}"
                   f"{'' if r['sampler'] == 'ddpm' else r['sampler'] + ' '}t*={r['t_star']:>4} "
