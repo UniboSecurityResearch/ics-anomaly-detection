@@ -155,9 +155,18 @@ defense.
    queued on hold until `p0` has been checked. `--plan` writes and counts the tasks
    without queueing. Every attack refuses to run (exit 3) if its detector's `t* = 0`
    calibration did not reproduce the stored detector (`--require-reproduction`).
+2m. `purification_phase2_margin.sh`: the false-alarm attacks redone with `--loss
+   margin`, because the phase-2 strength check found the standard false-alarm attack
+   not saturated under purification (log loss up to +14 points on seed 7). M1 margin
+   (kappa 0.5) for all 18 detectors at `t*` = 0 and T_STARS; M2 log loss for seeds 21
+   and 42 (so the worst case over mean, log and margin exists for every detector); M3
+   kappa 0.1 on seed 7 (sensitivity). Same calibrations and output tree as phase 2.
 
 Tools added for phase 2: `--loss log` (PGD on the mean log score, so targets far
-above `theta` do not dominate the objective), `--sampler noise` (ablation: the
+above `theta` do not dominate the objective), `--loss margin --margin kappa` (the log
+score relative to `theta`, capped once a target is past `theta` by kappa: the decision
+counts targets past `theta`, not how far past, and with the mean objective PGD raised
+the mean score by inflating a few windows while the share flagged stayed flat), `--sampler noise` (ablation: the
 forward noise of `t*` rescaled to the input, no denoiser), `per_target.json` in every
 attack folder (targets, E, per-target detection rates, scores of the scored
 timesteps clean and attacked, which of them were modifiable) and

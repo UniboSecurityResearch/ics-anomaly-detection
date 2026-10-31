@@ -22,6 +22,9 @@ Goals:
                metrics: detection rate (DR) on all targets and on E (ASR = 1 - DR_E).
   false_alarm  targets = normal timesteps (same sampling); loss = minus the mean
                score; metric: fraction of targets flagged (false-alarm rate).
+--loss log / margin replace the instance score by its log, or by the log score relative
+to theta capped past theta (objective_terms; margin = the objective of the phase-2
+false-alarm re-run).
 
 Gradient modes (--gradient):
   full       the attacker differentiates the exact defense (same t*, K, sampler);
@@ -78,9 +81,17 @@ def add_attack_args(ap):
     ap.add_argument("--modifiable", choices=["detector", "window"], default="detector",
                     help="rows the attacker may change: those feeding the undefended detector "
                          "(same threat model for every arm; default) or whole purified windows")
-    ap.add_argument("--loss", choices=["mean", "log"], default="mean",
-                    help="PGD objective over the loss targets: mean instance score (default) or "
-                         "mean log score, which keeps targets far above theta from dominating")
+    ap.add_argument("--loss", choices=["mean", "log", "margin"], default="mean",
+                    help="PGD objective over the loss targets: mean instance score (default), "
+                         "mean log score, which keeps targets far above theta from dominating, or "
+                         "margin: the log score relative to theta, capped once a target is past "
+                         "theta by --margin (see objective_terms)")
+    ap.add_argument("--margin", type=float, default=0.5,
+                    help="with --loss margin: relative margin kappa past theta after which a target "
+                         "no longer counts (false alarm: score >= theta (1 + kappa); evasion: score "
+                         "<= theta (1 - kappa)); 0 < kappa < 1. Wide by default: under purification "
+                         "the score of a window changes from draw to draw, and a target capped just "
+                         "past theta in the EOT draws can fall below it with fresh noise")
     ap.add_argument("--eot", type=int, default=20, help="EOT samples per iteration (1 if deterministic)")
     ap.add_argument("--eval-draws", type=int, default=10)
     ap.add_argument("--trace-every", type=int, default=10)
@@ -121,6 +132,38 @@ class DefendedDetector:
         if return_scores:
             return out, scores[near_local - self.first]
         return out
+
+
+def objective_terms(inst, loss: str, goal: str, theta: float, margin: float = 0.5):
+    """Per-target terms of the PGD objective from the instance scores `inst` (a tensor);
+    the attack MINIMISES sign * weighted sum of these terms (sign = +1 for evasion, -1
+    for false alarm), so evasion pushes them down and false alarm up.
+
+    mean    the instance score itself (phase 2 default).
+    log     log score: a target far above theta no longer dominates the mean.
+    margin  z = log(score / theta), capped where the decision no longer needs it:
+            false alarm min(z, log(1 + kappa)), evasion max(z, log(1 - kappa)).
+            A row is flagged only if every score of its w-row window is above theta,
+            so what matters is HOW MANY targets are past theta, not how far: with the
+            mean objective PGD can raise the mean score by inflating a few windows
+            while the share flagged stays flat (phase 2, false alarm under
+            purification). The cap removes the gradient of targets already past theta
+            by kappa (a safety margin for the purifier's randomness), so the budget
+            goes to the others.
+    """
+    if loss == "mean":
+        return inst
+    z = tf.math.log(inst + 1e-12)
+    if loss == "log":
+        return z
+    if loss != "margin":
+        raise ValueError(f"unknown loss {loss}")
+    if not 0.0 < margin < 1.0:
+        raise ValueError(f"--margin must be in (0, 1), got {margin}")
+    z = z - float(np.log(theta))
+    if goal == "false_alarm":
+        return tf.minimum(z, float(np.log1p(margin)))
+    return tf.maximum(z, float(np.log1p(-margin)))
 
 
 def reproduction_ok(path, model_dir=None, params=None) -> tuple:
@@ -165,6 +208,14 @@ def run_attack(args) -> int:
         if not ok:
             print("ERROR: attack refused (the defended and undefended arms would not be comparable)")
             return 3
+    if args.loss == "margin":
+        if args.gradient == "blind":
+            # the blind attacker targets the UNDEFENDED detector, whose theta is not the
+            # defended one recorded in --defense: the margin would be measured against
+            # the wrong threshold
+            raise SystemExit("--loss margin is not defined for --gradient blind")
+        if not 0.0 < args.margin < 1.0:
+            raise SystemExit(f"--margin must be in (0, 1), got {args.margin}")
     with open(args.defense) as fd:
         dfn = json.load(fd)
     out = Path(args.out)
@@ -295,9 +346,8 @@ def run_attack(args) -> int:
             tape.watch(xc)
             windows = tf.gather(xc, wi)
             errs = errors_tf(model, p_att, windows, geom, seed, g_mode)
-            inst = tf.reduce_mean(errs, axis=1)
-            if args.loss == "log":
-                inst = tf.math.log(inst + 1e-12)
+            inst = objective_terms(tf.reduce_mean(errs, axis=1), args.loss, args.goal,
+                                   det.theta, args.margin)
             loss = tf.reduce_sum(inst * wt) * sign
         return loss, tf.convert_to_tensor(tape.gradient(loss, xc))
 
@@ -409,6 +459,7 @@ def run_attack(args) -> int:
         model=name, model_dir=dfn["model_dir"], model_type=model_type, dataset=args.dataset,
         defense=dict(dfn, purifier=p_def.describe()), goal=args.goal, split=args.split,
         attacker=dict(gradient=args.gradient, purifier=p_att.describe(), eot=eot, loss=args.loss,
+                      margin=(args.margin if args.loss == "margin" else None),
                       iterations=args.iterations, restarts=args.restarts,
                       alpha_relative=args.alpha_relative,
                       epsilon_range_fraction=args.epsilon_range_fraction,

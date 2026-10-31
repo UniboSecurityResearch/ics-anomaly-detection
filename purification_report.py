@@ -32,7 +32,7 @@ def attack_rows(root):
             goal=s["goal"], t_star=s["defense"]["t_star"], steps=s["defense"]["purifier"]["n_denoising_steps"],
             sampler=s["defense"]["sampler"], theta=s["defense"]["theta"], window=s["defense"]["window"],
             attacker=a["gradient"], attacker_steps=a["purifier"]["n_denoising_steps"], eot=a["eot"],
-            iterations=a["iterations"], restarts=a["restarts"], loss=a.get("loss", "mean"), alpha_rel=a["alpha_relative"],
+            iterations=a["iterations"], restarts=a["restarts"], loss=a.get("loss", "mean") + (f"{a['margin']:g}" if a.get("loss") == "margin" else ""), alpha_rel=a["alpha_relative"],
             eps_range=a["epsilon_range_fraction"], protected=a["protect_actuators"],
             modifiable=a.get("modifiable", "window" if a["gradient"] not in ("blind",) and s["defense"]["t_star"] > 0 else "detector"),
             modifiable_rows=a.get("modifiable_rows", ""), random_start=a.get("random_start", True),
@@ -95,7 +95,7 @@ def main():
                                             r["attacker"], r["alpha_rel"], r["iterations"], r["eot"], r["loss"], r["sampler"])):
             extra = (f" DR_E {fmt(r['dr_E'])}+-{fmt(r['dr_E_std'])} ASR {fmt(r['asr'])}"
                      if r["goal"] == "evasion" else "")
-            print(f"  {r['model'][:22]:<22} {r['goal']:<11} eps={r['eps_range']:<5} rows={r['modifiable'][:3]} "
+            print(f"  {r['run'].split('/')[0][:22]:<22} {r['goal']:<11} eps={r['eps_range']:<5} rows={r['modifiable'][:3]} "
                   f"a={r['alpha_rel']:<5} it={r['iterations']:<3} n={r['targets']:<4}{'' if not r['block'] else '/' + str(r['blocks']) + 'x' + str(r['block'])} "
                   f"{'' if r['protected'] else 'actFREE '}{'' if r['random_start'] else 'noRS '}"
                   f"{'' if r['loss'] == 'mean' else 'loss=' + r['loss'] + ' '}{'' if r['restarts'] == 1 else 'R=' + str(r['restarts']) + ' '}"

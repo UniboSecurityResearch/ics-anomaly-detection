@@ -117,8 +117,36 @@ def check_per_target(out):
     return p, s
 
 
+def check_objective_terms():
+    """The margin objective: values and gradients on both sides of the cap."""
+    theta, k = 0.5, 0.10
+    s = tf.constant([0.05, 0.4, 0.5, 0.54, 0.56, 5.0], tf.float64)
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(s)
+        fa = A.objective_terms(s, "margin", "false_alarm", theta, k)
+        ev = A.objective_terms(s, "margin", "evasion", theta, k)
+    z = np.log(s.numpy() / theta)
+    assert np.allclose(fa.numpy(), np.minimum(z, np.log(1.1)))
+    assert np.allclose(ev.numpy(), np.maximum(z, np.log(0.9)))
+    g_fa, g_ev = tape.gradient(fa, s).numpy(), tape.gradient(ev, s).numpy()
+    # false alarm: gradient 1/s below theta (1 + k), none past it
+    assert np.allclose(g_fa[:4], 1 / s.numpy()[:4]) and np.all(g_fa[4:] == 0)
+    # evasion: no gradient at or below theta (1 - k) = 0.45, 1/s above it
+    assert np.all(g_ev[:2] == 0) and np.allclose(g_ev[2:], 1 / s.numpy()[2:])
+    assert np.allclose(A.objective_terms(s, "mean", "evasion", theta).numpy(), s.numpy())
+    assert np.allclose(A.objective_terms(s, "log", "evasion", theta).numpy(), np.log(s.numpy() + 1e-12))
+    for bad in (0.0, 1.0, -0.1):
+        try:
+            A.objective_terms(s, "margin", "evasion", theta, bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"margin {bad} must be refused")
+    print("objective_terms checks passed")
+
+
 def main():
     tf.random.set_seed(0)
+    check_objective_terms()
     world = fake_world()
     keep = os.environ.get("SMOKE_OUT")  # keep the outputs (e.g. to try purification_per_target.py)
     with tempfile.TemporaryDirectory() as tmp:
@@ -150,12 +178,21 @@ def main():
         p, s = check_per_target(out)
         assert status == 0 and len(p["targets"]) == 64 and s["attacker"]["n_blocks"] == 2
         print("guard and block-length checks passed")
+        try:
+            run(tmp, "blind_margin", defense=defense(tmp, 20), goal="false_alarm", gradient="blind",
+                loss="margin", **common)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("--loss margin with --gradient blind must be refused")
         cases = [
             ("undef_ev", dict(defense=defense(tmp, 0), goal="evasion", eot=1)),
             ("undef_fa", dict(defense=defense(tmp, 0), goal="false_alarm", eot=1)),
             ("full_ev", dict(defense=defense(tmp, 20), goal="evasion", eot=2)),
             ("full_ev_log", dict(defense=defense(tmp, 20), goal="evasion", eot=2, loss="log")),
             ("full_fa_R2", dict(defense=defense(tmp, 20), goal="false_alarm", eot=2, restarts=2)),
+            ("full_fa_mrg", dict(defense=defense(tmp, 20), goal="false_alarm", eot=2, loss="margin")),
+            ("undef_ev_mrg", dict(defense=defense(tmp, 0), goal="evasion", eot=1, loss="margin", margin=0.2)),
             ("surrogate", dict(defense=defense(tmp, 20), goal="evasion", eot=2, gradient="surrogate", attack_steps=2)),
             ("bpda", dict(defense=defense(tmp, 20), goal="false_alarm", eot=2, gradient="bpda")),
             ("blind", dict(defense=defense(tmp, 20), goal="evasion", gradient="blind")),
@@ -170,6 +207,8 @@ def main():
             status, out = run(tmp, name, **args)
             assert status == 0, name
             p, s = check_per_target(out)
+            if s["attacker"]["loss"] == "margin":
+                assert s["attacker"]["margin"] == args.get("margin", 0.5), name
             print(f"{name:<12} loss={s['attacker']['loss']:<4} sampler={s['defense']['sampler']:<5} "
                   f"clean {s['clean']['flagged_mean']:.3f} -> {s['reported']['flagged_mean']:.3f} "
                   f"modifiable {s['attacker']['modifiable_rows']}")
