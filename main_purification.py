@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+from adversarial.targets import actuator_indices
 from purification.calibration import build_splits, check_reproduction, detection_metrics, grid_search
 from purification.common import GRIDS, git_state, load_data, load_detector, load_purifier
 from purification.instances import Scorer, make_geometry
@@ -64,10 +65,17 @@ def parse_args(argv=None):
     cal.add_argument("--metric", default=None, help="default: the model's selection metric")
     cal.add_argument("--max-fpr", type=float, default=None, help="default: the model's FPR cap")
     cal.add_argument("--draws", type=int, default=5, help="independent purification draws on the final split")
+    cal.add_argument("--keep-actuators", action="store_true",
+                     help="purify the sensors only: the actuator channels stay as observed "
+                          "(treated as known during the denoising, see purification.purifier.Purifier)")
     att = sub.add_parser("attack")
     add_common(att)
     from purification.attack import add_attack_args
     add_attack_args(att)
+    per = sub.add_parser("per-attack")
+    add_common(per)
+    from purification.per_attack import add_per_attack_args
+    add_per_attack_args(per)
     return ap.parse_args(argv)
 
 
@@ -104,11 +112,12 @@ def calibrate(args) -> int:
     stored_window = params.get("best_window")
     summary = []
     status = 0
+    keep = actuator_indices(cols) if args.keep_actuators else None
     for t_star in args.t_star:
         started = time.time()
-        purifier, diff_cfg = load_purifier(args.diffusion, t_star, args.steps, args.sampler)
+        purifier, diff_cfg = load_purifier(args.diffusion, t_star, args.steps, args.sampler, keep)
         scorer = Scorer(model, purifier, geom, args.batch)
-        tag = f"tstar{t_star:04d}_k{purifier.n_steps:03d}_{args.sampler}"
+        tag = f"tstar{t_star:04d}_k{purifier.n_steps:03d}_{args.sampler}" + ("_keepact" if keep else "")
         seed0 = args.seed * 1000 + t_star
 
         def scores(series, targets, draw, part):
@@ -150,7 +159,7 @@ def calibrate(args) -> int:
                        target_offset=args.target_offset, context=args.context, lookahead=geom.lookahead,
                        diffusion=args.diffusion,
                        t_star=t_star, steps=args.steps, sampler=args.sampler,
-                       theta=res["theta"], window=res["window"], percentile=res["percentile"],
+                       keep_actuators=bool(keep), theta=res["theta"], window=res["window"], percentile=res["percentile"],
                        calibration=str(out / f"{tag}.json"))
         with open(out / f"defense_{tag}.json", "w") as fd:
             json.dump(defense, fd, indent=1)
@@ -179,6 +188,9 @@ def main() -> int:
     args = parse_args()
     if args.cmd == "calibrate":
         return calibrate(args)
+    if args.cmd == "per-attack":
+        from purification.per_attack import run_per_attack
+        return run_per_attack(args)
     from purification.attack import run_attack
     return run_attack(args)
 

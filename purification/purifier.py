@@ -20,7 +20,7 @@ t_star and fewer denoising steps, used by the attacker only.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import tensorflow as tf
@@ -30,13 +30,20 @@ from . import schedule as S
 
 class Purifier:
     def __init__(self, denoiser, t_star: int, n_steps: int, sampler: str = "ddpm",
-                 T: int = S.T_DEFAULT):
+                 T: int = S.T_DEFAULT, keep_channels: Optional[Sequence[int]] = None):
         if t_star < 0 or t_star > T:
             raise ValueError("t_star must be in [0, T]")
         if t_star > 0 and denoiser is None and sampler != "noise":
             raise ValueError("a denoiser is required for t_star > 0")
         if sampler not in ("ddpm", "ddim", "noise"):
             raise ValueError(sampler)
+        if keep_channels and sampler == "noise":
+            raise ValueError("keep_channels needs a denoiser")
+        # channels treated as known, as in inpainting without resampling (Lugmayr et al.
+        # 2022): after every reverse step they are replaced by the input diffused to that
+        # timestep, so the other channels are denoised given them and the purified output
+        # keeps them unchanged (the last step reaches timestep 0, no noise)
+        self.keep_channels = sorted(int(c) for c in keep_channels) if keep_channels else []
         self.denoiser = denoiser
         self.t_star = int(t_star)
         self.sampler = sampler
@@ -53,7 +60,7 @@ class Purifier:
 
     def describe(self) -> dict:
         return dict(t_star=self.t_star, n_denoising_steps=self.n_steps, sampler=self.sampler,
-                    timesteps=self.steps, T=self.T)
+                    timesteps=self.steps, T=self.T, keep_channels=self.keep_channels)
 
     def _eps(self, x, t_vec):
         return self.denoiser(x, t_vec, training=False)
@@ -78,7 +85,18 @@ class Purifier:
                 return x + tf.stop_gradient(x0 - x)
             raise ValueError(f"unknown gradient mode {gradient}")
         noises = [noise(i + 1) for i in range(len(self.coeffs))]
-        x0 = S.reverse(x_t, self._eps, self.coeffs, noises, self.sampler)
+        after_step = None
+        if self.keep_channels:
+            ab = S.alpha_bars(self.T)
+            mask = np.zeros(x.shape[-1], np.float32)
+            mask[self.keep_channels] = 1.0
+            mask = tf.constant(mask[None, None, :], x.dtype)
+
+            def after_step(x_s, s, i):  # noise of these draws: indices after the reverse ones
+                known = S.diffuse(x, s, noise(len(self.coeffs) + 1 + i), self.T)
+                return mask * known + (1.0 - mask) * x_s
+
+        x0 = S.reverse(x_t, self._eps, self.coeffs, noises, self.sampler, after_step)
         if gradient == "full":
             return x0
         if gradient == "bpda":

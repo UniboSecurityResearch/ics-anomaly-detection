@@ -161,6 +161,18 @@ defense.
    (kappa 0.5) for all 18 detectors at `t*` = 0 and T_STARS; M2 log loss for seeds 21
    and 42 (so the worst case over mean, log and margin exists for every detector); M3
    kappa 0.1 on seed 7 (sensitivity). Same calibrations and output tree as phase 2.
+2f. `purification_followup.sh`: five checks from the per-attack analysis of the phase-2
+   records, on the same calibrations and output tree. F1: a higher theta alone, no
+   purifier (`--theta-factor`), because raising theta reproduced most of the false-alarm
+   gain when the phase-2 scores were re-thresholded offline. F2: false alarm by an attacker
+   who also changes the context rows (`--modifiable window`) on the other 17 detectors,
+   because on AE seed 7 this removes the gain. F3: sensors-only purifier (`calibrate
+   --keep-actuators`), because the attacks on actuators account for most of the evasion
+   loss; the actuator channels are treated as known during the denoising, so this assumes
+   the attacker cannot spoof them. F4: budget on the range without the plant's start-up
+   (`--range-start 21600`), which sets the range of many sensors. F5: detection of whole
+   attacks without an attacker (`main_purification.py per-attack`), because row-level F1
+   is dominated by attack 28 and the attacks are otherwise measured on a central block.
 
 Tools added for phase 2: `--loss log` (PGD on the mean log score, so targets far
 above `theta` do not dominate the objective), `--loss margin --margin kappa` (the log

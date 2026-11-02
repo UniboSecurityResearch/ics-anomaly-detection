@@ -115,10 +115,12 @@ def diffuse(x: tf.Tensor, t_star: int, noise: tf.Tensor, T: int = T_DEFAULT) -> 
 
 
 def reverse(x_t: tf.Tensor, eps_fn: EpsFn, coeffs: Sequence[StepCoefficients],
-            noises: Optional[Sequence[tf.Tensor]], sampler: str = "ddpm") -> tf.Tensor:
+            noises: Optional[Sequence[tf.Tensor]], sampler: str = "ddpm",
+            after_step: Optional[Callable[[tf.Tensor, int, int], tf.Tensor]] = None) -> tf.Tensor:
     """Run the respaced reverse chain from x_t (at coeffs[0].t) down to 0.
 
     noises[i] is the Gaussian noise of step i (unused at the last step and by DDIM).
+    after_step(x, s, i), if given, replaces x after step i, which reached timestep s.
     """
     x = x_t
     batch = tf.shape(x)[0]
@@ -134,6 +136,8 @@ def reverse(x_t: tf.Tensor, eps_fn: EpsFn, coeffs: Sequence[StepCoefficients],
             x = c.sqrt_ab_prev * x0_hat + c.sqrt_one_minus_ab_prev * eps
         else:
             raise ValueError(f"unknown sampler {sampler}")
+        if after_step is not None:
+            x = after_step(x, c.prev, i)
     return x
 
 

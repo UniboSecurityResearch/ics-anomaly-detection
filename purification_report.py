@@ -30,7 +30,9 @@ def attack_rows(root):
         rows.append(dict(
             run=os.path.relpath(os.path.dirname(path), root), model=s["model"], split=s["split"],
             goal=s["goal"], t_star=s["defense"]["t_star"], steps=s["defense"]["purifier"]["n_denoising_steps"],
-            sampler=s["defense"]["sampler"], theta=s["defense"]["theta"], window=s["defense"]["window"],
+            sampler=s["defense"]["sampler"], keep_actuators=bool(s["defense"].get("keep_actuators")),
+            theta_factor=s["defense"].get("theta_factor", 1.0), range_start=a.get("range_start", 0),
+            theta=s["defense"]["theta"], window=s["defense"]["window"],
             attacker=a["gradient"], attacker_steps=a["purifier"]["n_denoising_steps"], eot=a["eot"],
             iterations=a["iterations"], restarts=a["restarts"], loss=a.get("loss", "mean") + (f"{a['margin']:g}" if a.get("loss") == "margin" else ""), alpha_rel=a["alpha_relative"],
             eps_range=a["epsilon_range_fraction"], protected=a["protect_actuators"],

@@ -77,7 +77,7 @@ def load_data(dataset: str):
     return x_train, np.asarray(x_test, dtype=np.float64), np.asarray(y_test), cols
 
 
-def load_purifier(diffusion_dir: Optional[str], t_star: int, n_steps: int, sampler: str):
+def load_purifier(diffusion_dir: Optional[str], t_star: int, n_steps: int, sampler: str, keep_channels=None):
     from .purifier import Purifier
     if t_star == 0:
         return Purifier(None, 0, 0, sampler), None
@@ -85,7 +85,7 @@ def load_purifier(diffusion_dir: Optional[str], t_star: int, n_steps: int, sampl
     if not diffusion_dir:
         raise SystemExit("--diffusion is required for t* > 0")
     model, config = load_denoiser(diffusion_dir)
-    return Purifier(model, t_star, n_steps, sampler), config
+    return Purifier(model, t_star, n_steps, sampler, keep_channels=keep_channels), config
 
 
 def data_digest(dataset: str) -> dict:

@@ -9,6 +9,7 @@ t* = 0 calibration did not reproduce it.
 """
 
 import argparse
+import csv
 import json
 import os
 import tempfile
@@ -17,6 +18,7 @@ import numpy as np
 import tensorflow as tf
 
 import purification.attack as A
+import purification.per_attack as PA
 from purification.calibration import Splits
 from purification.denoiser import UNet1D
 from purification.purifier import Purifier
@@ -71,15 +73,17 @@ def install(world, tmp):
                       final_labels=yte[TUNE + fl], tune_offset=0, final_offset=TUNE,
                       tune_len=TUNE, final_len=N_TEST - TUNE)
     A.build_splits = splits
-    A.load_purifier = lambda diff, t, k, s: (Purifier(None if t == 0 else net, t, k, s), None)
+    A.load_purifier = lambda diff, t, k, s, keep=None: (Purifier(None if t == 0 else net, t, k, s, keep_channels=keep), None)
+    PA.load_data, PA.load_detector, PA.build_splits, PA.load_purifier = A.load_data, A.load_detector, A.build_splits, A.load_purifier
+    PA.kept_channels = lambda dfn, cols: [5] if dfn.get("keep_actuators") else None
 
 
-def defense(tmp, t_star, sampler="ddpm"):
-    path = os.path.join(tmp, f"defense_{t_star}_{sampler}.json")
+def defense(tmp, t_star, sampler="ddpm", keep=False):
+    path = os.path.join(tmp, f"defense_{t_star}_{sampler}_{int(keep)}.json")
     with open(path, "w") as fd:
         json.dump(dict(model_dir="toy", model="AE-toy", model_type="AE", history=None, target_offset=0,
                        context=16, lookahead=2, diffusion="toy", t_star=t_star, steps=4, sampler=sampler,
-                       theta=0.5, window=5, percentile=0.99, calibration="x"), fd)
+                       keep_actuators=keep, theta=0.5, window=5, percentile=0.99, calibration="x"), fd)
     return path
 
 
@@ -142,6 +146,41 @@ def check_objective_terms():
             continue
         raise AssertionError(f"margin {bad} must be refused")
     print("objective_terms checks passed")
+
+
+def check_per_attack(tmp):
+    """Whole-attack detection: one row per attack, a higher theta never flags more, and the
+    t* = 0 metrics are written for each multiple of theta."""
+    ap = argparse.ArgumentParser()
+    PA.add_per_attack_args(ap)
+    for name, default in (("--out", None), ("--batch", 64), ("--dataset", "SWAT-CLEAN"), ("--model-dir", "toy")):
+        ap.add_argument(name, default=default, **({"type": int} if name == "--batch" else {}))
+    out = os.path.join(tmp, "per_attack")
+    args = ap.parse_args(["--defense", defense(tmp, 0), defense(tmp, 20), defense(tmp, 20, keep=True),
+                          "--theta-factors", "1", "2", "--eval-draws", "2", "--out", out])
+    assert PA.run_per_attack(args) == 0
+    with open(os.path.join(out, "per_attack.csv")) as fd:
+        rows = list(csv.DictReader(fd))
+    with open(os.path.join(out, "final_metrics.csv")) as fd:
+        final = list(csv.DictReader(fd))
+    # the toy final split has one attack: rows 150-229 of the split
+    assert len(rows) == 6 and {int(r["attack_start"]) for r in rows} == {150} and {int(r["attack_rows"]) for r in rows} == {80}
+    assert len(final) == 2 and all(int(f["t_star"]) == 0 for f in final)
+    for keep in ("False", "True"):
+        low = [r for r in rows if r["t_star"] == "20" and r["keep_actuators"] == keep]
+        assert float(low[0]["flagged_share"]) >= float(low[1]["flagged_share"]), keep
+    und = [r for r in rows if r["t_star"] == "0"]
+    assert float(und[0]["detected_share"]) in (0.0, 1.0) and und[0]["draws"] == "1"
+    assert float(und[0]["flagged_share"]) >= float(und[1]["flagged_share"])
+    with open(args.defense[0]) as fd:
+        dfn = json.load(fd)
+    assert abs(float(final[1]["theta"]) - 2 * dfn["theta"]) < 1e-9
+    try:
+        PA.run_per_attack(args)
+    except SystemExit:
+        print("per-attack checks passed")
+    else:
+        raise AssertionError("per-attack must not overwrite its results")
 
 
 def main():
@@ -212,6 +251,45 @@ def main():
             print(f"{name:<12} loss={s['attacker']['loss']:<4} sampler={s['defense']['sampler']:<5} "
                   f"clean {s['clean']['flagged_mean']:.3f} -> {s['reported']['flagged_mean']:.3f} "
                   f"modifiable {s['attacker']['modifiable_rows']}")
+        # sensors-only purifier: recorded, runs for both goals, actuator rows still unchanged
+        for goal in ("evasion", "false_alarm"):
+            status, out = run(tmp, "keep_" + goal, defense=defense(tmp, 20, keep=True), goal=goal, eot=2, **common)
+            p, s = check_per_target(out)
+            assert status == 0 and s["defense"]["purifier"]["keep_channels"] == [5] and s["defense"]["keep_actuators"]
+            with np.load(os.path.join(out, "final_iterate_changed_rows.npz")) as npz:
+                assert np.array_equal(npz["x_clean_scaled"][:, 5], npz["x_adv_scaled"][:, 5])
+        # a higher theta: applied to the detector, the margin and the records
+        status, out = run(tmp, "theta_x3", defense=defense(tmp, 0), goal="false_alarm", eot=1, theta_factor=3.0,
+                          loss="margin", margin=0.1, **common)
+        p, s = check_per_target(out)
+        assert status == 0 and abs(p["theta"] - 1.5) < 1e-9 and s["defense"]["theta_factor"] == 3.0
+        try:
+            run(tmp, "theta_neg", defense=defense(tmp, 0), goal="evasion", eot=1, theta_factor=-1.0, **common)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("a negative --theta-factor must be refused")
+        # budget without the start of the training file: a spike there sets the range otherwise
+        x_train, x_test, y, cols, _, _ = world
+        spiked = x_train.copy()
+        spiked[:5, :5] += 100.0
+        A.load_data = lambda ds: (spiked, x_test, y, cols)
+        _, out = run(tmp, "range_all", defense=defense(tmp, 0), goal="evasion", eot=1, **common)
+        _, s_all = check_per_target(out)
+        _, out = run(tmp, "range_op", defense=defense(tmp, 0), goal="evasion", eot=1, range_start=5, **common)
+        _, s_op = check_per_target(out)
+        limit = 0.3 * (x_train[5:, :5].max(axis=0) - x_train[5:, :5].min(axis=0)).max() + 1e-5
+        assert s_op["attacker"]["range_start"] == 5 and s_op["reported"]["linf_scaled"] <= limit
+        assert s_all["attacker"]["range_start"] == 0 and s_all["reported"]["linf_scaled"] > limit
+        A.load_data = lambda ds: (x_train, x_test, y, cols)
+        try:
+            run(tmp, "range_bad", defense=defense(tmp, 0), goal="evasion", eot=1, range_start=N_TRAIN, **common)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("--range-start past the training rows must be refused")
+        print("sensors-only, theta factor and range-start checks passed")
+        check_per_attack(tmp)
     print("ATTACK SMOKE TEST PASSED")
 
 

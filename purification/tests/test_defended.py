@@ -132,9 +132,54 @@ def test_noise_ablation():
     print(f"noise ablation: residual std {z.std():.3f} (expected 1), BPDA gradient = identity")
 
 
+def test_keep_channels():
+    """Sensors-only purifier: kept channels come out unchanged, are read by the denoiser
+    (the other channels depend on them), and gradients match finite differences."""
+    rng = np.random.default_rng(2)
+    d, keep = 5, [1, 4]
+    other = [0, 2, 3]
+    net = UNet1D(d, base_channels=16, seed=3)
+    for v in net.variables_list:
+        v.assign(v + 0.05 * tf.random.stateless_normal(v.shape, seed=[1, 2]))
+    x = tf.constant(rng.standard_normal((4, 16, d)), tf.float32)
+    for t_star, k, sampler in ((20, 10, "ddpm"), (50, 10, "ddpm"), (5, 5, "ddpm"), (50, 10, "ddim")):
+        p = Purifier(net, t_star, k, sampler, keep_channels=keep)
+        y = p(x, seed_pair(3)).numpy()
+        assert np.allclose(y[..., keep], x.numpy()[..., keep], atol=1e-5), (t_star, sampler)
+        y0 = Purifier(net, t_star, k, sampler)(x, seed_pair(3)).numpy()
+        assert not np.allclose(y[..., other], y0[..., other], atol=1e-4), "kept channels must condition the others"
+        assert not np.allclose(y[..., other], x.numpy()[..., other], atol=1e-3)
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            loss = tf.reduce_sum(tf.gather(p(x, seed_pair(3)), keep, axis=-1) ** 2)
+        g = tape.gradient(loss, x).numpy()
+        assert np.allclose(g[..., keep], 2 * x.numpy()[..., keep], atol=1e-3), "identity on the kept channels"
+        assert np.allclose(g[..., other], 0.0, atol=1e-6)
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            loss = tf.reduce_sum(tf.gather(p(x, seed_pair(3)), other, axis=-1) ** 2)
+        g = tape.gradient(loss, x)
+        assert np.abs(g.numpy()[..., keep]).max() > 0, "the sensors must depend on the kept channels"
+        direction = tf.constant(rng.standard_normal(x.shape), tf.float32)
+        f = lambda z: tf.reduce_sum(tf.gather(p(z, seed_pair(3)), other, axis=-1) ** 2)
+        h = 1e-2
+        numeric = float((f(x + h * direction) - f(x - h * direction)) / (2 * h))
+        analytic = float(tf.reduce_sum(g * direction))
+        assert abs(analytic - numeric) / max(abs(numeric), 1e-6) < 2e-2, (analytic, numeric)
+    assert p.describe()["keep_channels"] == keep
+    try:
+        Purifier(None, 20, 0, "noise", keep_channels=keep)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("keep_channels without a denoiser must be refused")
+    print("sensors-only purifier: kept channels unchanged, sensors conditioned on them, gradients checked")
+
+
 if __name__ == "__main__":
     test_noise_ablation()
     test_identity_matches_attack_suite()
     test_gradient_through_purifier()
     test_seed_determinism()
+    test_keep_channels()
     print("ALL DEFENDED-DETECTOR TESTS PASSED")

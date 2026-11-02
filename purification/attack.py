@@ -72,6 +72,13 @@ def add_attack_args(ap):
                          "flagged only if its whole w-row window is above theta, so blocks shorter "
                          "than w cannot be flagged at all"),
     ap.add_argument("--epsilon-range-fraction", type=float, default=0.10)
+    ap.add_argument("--range-start", type=int, default=0,
+                    help="training rows skipped when computing each feature's range for the budget: "
+                         "the SWaT training file starts with the plant's start-up, which sets the "
+                         "range of many sensors (21600 = its first 6 hours)")
+    ap.add_argument("--theta-factor", type=float, default=1.0,
+                    help="multiply the theta of --defense by this (same window): the detector with a "
+                         "higher threshold, attacked and evaluated at that threshold")
     ap.add_argument("--protect-actuators", action="store_true")
     ap.add_argument("--alpha-relative", type=float, default=0.10)
     ap.add_argument("--iterations", type=int, default=200)
@@ -200,6 +207,11 @@ def central_blocks(indices: np.ndarray, length: int) -> np.ndarray:
     return np.concatenate(out).astype(indices.dtype)
 
 
+def kept_channels(dfn: dict, cols):
+    """The channels the purifier of a defense record keeps (see Purifier), or None."""
+    return actuator_indices(cols) if dfn.get("keep_actuators") else None
+
+
 def run_attack(args) -> int:
     started = time.time()
     if args.require_reproduction:
@@ -218,6 +230,10 @@ def run_attack(args) -> int:
             raise SystemExit(f"--margin must be in (0, 1), got {args.margin}")
     with open(args.defense) as fd:
         dfn = json.load(fd)
+    if args.theta_factor <= 0:
+        raise SystemExit(f"--theta-factor must be > 0, got {args.theta_factor}")
+    if args.theta_factor != 1.0:
+        dfn = dict(dfn, theta=dfn["theta"] * args.theta_factor, theta_factor=args.theta_factor)
     out = Path(args.out)
     if (out / "summary.json").exists():
         raise SystemExit(f"{out}/summary.json exists; use a new --out (nothing is overwritten)")
@@ -235,14 +251,16 @@ def run_attack(args) -> int:
     local_all = np.arange(first, c_len, dtype=np.int64)  # labels_all is aligned with these
 
     # ---- defense, attacker's view of it ------------------------------------
-    p_def, _ = load_purifier(dfn.get("diffusion"), int(dfn["t_star"]), int(dfn["steps"]), dfn["sampler"])
+    keep = kept_channels(dfn, cols)
+    p_def, _ = load_purifier(dfn.get("diffusion"), int(dfn["t_star"]), int(dfn["steps"]), dfn["sampler"], keep)
     stochastic = not p_def.identity
     if args.gradient in ("full", "bpda"):
         p_att, g_mode = p_def, ("bpda" if args.gradient == "bpda" else "full")
     elif args.gradient == "surrogate":
         if not args.attack_steps:
             raise SystemExit("--gradient surrogate needs --attack-steps")
-        p_att, g_mode = Purifier(p_def.denoiser, p_def.t_star, args.attack_steps, dfn["sampler"]), "full"
+        p_att, g_mode = Purifier(p_def.denoiser, p_def.t_star, args.attack_steps, dfn["sampler"],
+                                 keep_channels=keep), "full"
     else:
         p_att, g_mode = Purifier(None, 0, 0), "full"
     att_stochastic = not p_att.identity
@@ -299,7 +317,10 @@ def run_attack(args) -> int:
           f"{np.round(clean.mean(axis=1), 4).tolist()}); E = {len(loss_targets)}", flush=True)
 
     # ---- budget and modifiable cells --------------------------------------------
-    feat_range = x_train.max(axis=0) - x_train.min(axis=0)
+    x_range = x_train[args.range_start:]
+    if len(x_range) == 0:
+        raise SystemExit(f"--range-start {args.range_start}: no training rows left")
+    feat_range = x_range.max(axis=0) - x_range.min(axis=0)
     eps = (args.epsilon_range_fraction * feat_range).astype(np.float32)
     protected = actuator_indices(cols) if args.protect_actuators else []
     if protected:
@@ -329,7 +350,7 @@ def run_attack(args) -> int:
     feat_mask = tf.constant(row_mask[:, None] * (eps > 0).astype(np.float32)[None, :])
     alpha = tf.constant((args.alpha_relative * eps)[None, :])
     sign = 1.0 if args.goal == "evasion" else -1.0   # we MINIMISE sign * mean score
-    print(f"budget: {args.epsilon_range_fraction} x training range, {len(protected)} protected "
+    print(f"budget: {args.epsilon_range_fraction} x training range (from row {args.range_start}), {len(protected)} protected "
           f"features; {int(row_mask.sum())} modifiable rows", flush=True)
 
     # ---- EOT loss / gradient ------------------------------------------------------
@@ -462,7 +483,7 @@ def run_attack(args) -> int:
                       margin=(args.margin if args.loss == "margin" else None),
                       iterations=args.iterations, restarts=args.restarts,
                       alpha_relative=args.alpha_relative,
-                      epsilon_range_fraction=args.epsilon_range_fraction,
+                      epsilon_range_fraction=args.epsilon_range_fraction, range_start=args.range_start,
                       protect_actuators=bool(args.protect_actuators), seed=args.seed,
                       modifiable=("window" if (args.modifiable == "window" and not p_att.identity)
                                   else "detector"),
